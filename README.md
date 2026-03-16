@@ -59,7 +59,6 @@ That's it. No global install needed. Auto-detects your project.
 | `npx kratos-memory status` | System dashboard |
 | `npx kratos-memory switch <path>` | Switch project |
 | `npx kratos-memory scan <text>` | Detect PII and secrets (`--redact`) |
-| `npx kratos-memory migrate` | Import existing data |
 | `npx kratos-memory hooks install` | Install auto-capture hooks |
 
 ## How agents use it
@@ -159,3 +158,13 @@ PRs welcome at [github.com/ceorkm/kratos-cli/pulls](https://github.com/ceorkm/kr
 ## License
 
 MIT
+
+---
+
+<div align="center">
+
+**Built for developers who are tired of repeating themselves.**
+
+[Report Bug](https://github.com/ceorkm/kratos-cli/issues) · [Request Feature](https://github.com/ceorkm/kratos-cli/issues)
+
+</div>

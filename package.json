@@ -1,6 +1,6 @@
 {
   "name": "kratos-memory",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Persistent memory for AI coding agents — CLI-first, encrypted, local",
   "main": "dist/cli/index.js",
   "type": "module",
@@ -18,7 +18,18 @@
     "start": "node dist/cli/index.js",
     "prepublishOnly": "npm run build"
   },
-  "keywords": ["cli", "ai-memory", "ai-agents", "claude-code", "codex", "cursor", "sqlite", "fts5", "memory", "persistent"],
+  "keywords": [
+    "cli",
+    "ai-memory",
+    "ai-agents",
+    "claude-code",
+    "codex",
+    "cursor",
+    "sqlite",
+    "fts5",
+    "memory",
+    "persistent"
+  ],
   "author": "",
   "license": "MIT",
   "dependencies": {
