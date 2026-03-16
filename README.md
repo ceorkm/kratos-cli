@@ -154,7 +154,7 @@ npx kratos-memory recent   # they're all here
 
 ## Contributing
 
-PRs welcome. [github.com/ceorkm/kratos-cli](https://github.com/ceorkm/kratos-cli)
+PRs welcome at [github.com/ceorkm/kratos-cli/pulls](https://github.com/ceorkm/kratos-cli/pulls)
 
 ## License
 
