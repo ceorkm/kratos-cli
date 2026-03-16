@@ -1,11 +1,11 @@
 {
-  "name": "kratos-cli",
+  "name": "kratos-memory",
   "version": "1.0.0",
   "description": "Persistent memory for AI coding agents — CLI-first, encrypted, local",
   "main": "dist/cli/index.js",
   "type": "module",
   "bin": {
-    "kratos-cli": "./bin/kratos-cli",
+    "kratos-memory": "./bin/kratos-cli",
     "kratos": "./bin/kratos-cli"
   },
   "repository": {
