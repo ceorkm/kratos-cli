@@ -14,6 +14,7 @@
 [![npm version](https://img.shields.io/npm/v/kratos-memory.svg)](https://www.npmjs.com/package/kratos-memory)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue.svg)](https://www.typescriptlang.org/)
+[![Formerly Kratos MCP](https://img.shields.io/badge/Formerly-Kratos%20MCP-333.svg)](https://github.com/ceorkm/kratos-mcp)
 
 **Persistent memory for AI coding agents. Works with any agent — Claude Code, Codex, Cursor, Cline, or anything that runs Bash.**
 
@@ -140,25 +141,20 @@ Each project is completely isolated. Different database, different encryption ke
 - **Zero network calls** — nothing ever leaves your machine
 - **No telemetry, no analytics, no cloud**
 
-## Migrating from kratos-mcp
+## Coming from Kratos MCP?
 
-If you were using the MCP version:
+This is the successor to [`kratos-mcp`](https://github.com/ceorkm/kratos-mcp). We moved from MCP to CLI because MCP eats too many tokens per tool call (JSON-RPC schema overhead on every interaction). The CLI is lighter, faster, and works with any agent — not just MCP-compatible ones.
+
+**Your data is already compatible.** Both versions use the same `~/.kratos/` storage and SQLite format. Just start using `npx kratos-memory` and your existing memories are there.
 
 ```bash
-npx kratos-memory migrate
+npx kratos-memory status   # see your existing memories
+npx kratos-memory recent   # they're all here
 ```
-
-Same database format. Your memories are already compatible.
 
 ## Contributing
 
-```bash
-git clone https://github.com/ceorkm/kratos-cli.git
-cd kratos-cli
-npm install
-npm run build
-node bin/kratos-cli --help
-```
+PRs welcome. [github.com/ceorkm/kratos-cli](https://github.com/ceorkm/kratos-cli)
 
 ## License
 
