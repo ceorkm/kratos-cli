@@ -51,13 +51,19 @@ export class PIIDetector {
     // Private Key
     { name: 'Private Key', regex: /-----BEGIN (?:RSA |EC )?PRIVATE KEY-----/g, type: 'secret' },
     // Password in config
-    { name: 'Password', regex: /(?:password|passwd|pwd|pass)[\s]*[:=][\s]*["']?([^"'\s]+)["']?/gi, type: 'secret' },
+    { name: 'Password', regex: /(?:password|passwd|pwd|pass)\s*(?:[:=]|is)\s*["']?([^\s"']{4,})["']?/gi, type: 'secret' },
     // Bearer Token
     { name: 'Bearer Token', regex: /Bearer\s+[A-Za-z0-9-._~+/]+=*/g, type: 'secret' },
     // Slack Token
     { name: 'Slack Token', regex: /xox[baprs]-[0-9]{10,13}-[0-9]{10,13}-[a-zA-Z0-9]{24,34}/g, type: 'secret' },
     // Stripe Key
     { name: 'Stripe Key', regex: /(?:sk|pk)_(?:test|live)_[0-9a-zA-Z]{24,}/g, type: 'secret' },
+    // OpenAI / AI API Keys (sk-...)
+    { name: 'AI API Key', regex: /sk-[a-zA-Z0-9_-]{8,}/g, type: 'secret' },
+    // Anthropic API Key
+    { name: 'Anthropic Key', regex: /sk-ant-[a-zA-Z0-9_-]{8,}/g, type: 'secret' },
+    // Generic prefixed API keys (key=..., api_key=..., etc.)
+    { name: 'API Key', regex: /(?:api[_-]?key|apikey|api[_-]?token)[\s]*[:=]\s*["']?([A-Za-z0-9_-]{10,})["']?/gi, type: 'secret' },
   ];
 
   private allowlist: Set<string> = new Set();

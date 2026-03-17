@@ -46,6 +46,7 @@ function renderResults(results: SearchResult[]): void {
     Output.memoryCard({
       id: r.memory.id,
       summary: r.memory.summary,
+      text: r.memory.text,
       tags: r.memory.tags,
       paths: r.memory.paths,
       importance: r.memory.importance,

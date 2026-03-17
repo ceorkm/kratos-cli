@@ -5,7 +5,8 @@ import chalk from 'chalk';
 export async function scanCommand(ctx: CLIContext, text: string, opts: {
   redact?: boolean;
 }): Promise<void> {
-  const result = ctx.piiDetector.detect(text);
+  const piiDetector = await ctx.getPIIDetector();
+  const result = piiDetector.detect(text);
 
   Output.header('Security Scan Results');
 

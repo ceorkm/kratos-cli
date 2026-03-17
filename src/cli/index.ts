@@ -1,8 +1,17 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import chalk from 'chalk';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { initCLIContext } from './core.js';
 import { Output } from './output.js';
+
+// Read version from package.json so it never drifts
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const pkg = JSON.parse(readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf-8'));
+const VERSION = pkg.version;
 
 const BANNER = `
 ${chalk.bold.red('  ██╗  ██╗██████╗  █████╗ ████████╗ ██████╗ ███████╗')}
@@ -13,7 +22,7 @@ ${chalk.bold.red('  ██║  ██╗██║  ██║██║  ██║
 ${chalk.bold.red('  ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝    ╚═════╝ ╚══════╝')}
 ${chalk.dim('  ─────────────────────────────────────────────────────')}
 ${chalk.white('  The God of War remembers everything.')}
-${chalk.dim(`  v1.0.0  |  CLI-first  |  FTS5  |  Encrypted`)}
+${chalk.dim(`  v${VERSION}  |  CLI-first  |  FTS5  |  Encrypted`)}
 `;
 
 const program = new Command();
@@ -21,7 +30,7 @@ const program = new Command();
 program
   .name('kratos')
   .description('Kratos Memory — Persistent memory for AI coding agents')
-  .version('1.0.0')
+  .version(VERSION)
   .addHelpText('before', BANNER);
 
 // ─── save ───────────────────────────────────────────────
@@ -83,6 +92,50 @@ program
     const ctx = await initCLIContext();
     const { getCommand } = await import('./commands/get.js');
     await getCommand(ctx, id);
+  });
+
+// ─── update ─────────────────────────────────────────────
+program
+  .command('update <id> <text>')
+  .description('Update a memory')
+  .option('-t, --tags <tags>', 'Replace tags (comma-separated)')
+  .option('-i, --importance <level>', 'Update importance 1-5')
+  .option('-p, --paths <paths>', 'Replace file paths (comma-separated)')
+  .action(async (id: string, text: string, opts) => {
+    const ctx = await initCLIContext();
+    const { updateCommand } = await import('./commands/update.js');
+    await updateCommand(ctx, id, text, opts);
+  });
+
+// ─── pin ────────────────────────────────────────────────
+program
+  .command('pin <id>')
+  .description('Pin a memory — pinned memories always surface first')
+  .option('-u, --unpin', 'Unpin the memory')
+  .action(async (id: string, opts) => {
+    const ctx = await initCLIContext();
+    const { pinCommand } = await import('./commands/pin.js');
+    await pinCommand(ctx, id, opts);
+  });
+
+// ─── export ─────────────────────────────────────────────
+program
+  .command('export')
+  .description('Export all memories as JSON')
+  .action(async () => {
+    const ctx = await initCLIContext();
+    const { exportCommand } = await import('./commands/export.js');
+    await exportCommand(ctx, {});
+  });
+
+// ─── summary ────────────────────────────────────────────
+program
+  .command('summary')
+  .description('Generate a project summary from all memories')
+  .action(async () => {
+    const ctx = await initCLIContext();
+    const { summaryCommand } = await import('./commands/summary.js');
+    await summaryCommand(ctx);
   });
 
 // ─── forget ─────────────────────────────────────────────

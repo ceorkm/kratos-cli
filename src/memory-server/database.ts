@@ -1,10 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
-import fs from 'fs-extra';
+import fs from 'node:fs';
 import crypto from 'crypto';
-import { Logger } from '../utils/logger.js';
-
-const logger = new Logger('MemoryDB');
 
 export interface Memory {
   id: string;
@@ -45,20 +42,25 @@ export class MemoryDatabase {
     this.projectRoot = projectRoot;
     this.projectId = projectId;
 
-    // CRITICAL: Each project gets COMPLETELY ISOLATED database
-    // Path: ~/.kratos/projects/{project_id}/databases/memories.db
-    // This ensures NO cross-contamination between projects
     const kratosHome = path.join(process.env.HOME || process.env.USERPROFILE || '', '.kratos');
-    const dbPath = path.join(kratosHome, 'projects', projectId, 'databases', 'memories.db');
-    fs.ensureDirSync(path.dirname(dbPath));
+    const dbDir = path.join(kratosHome, 'projects', projectId, 'databases');
+    const dbPath = path.join(dbDir, 'memories.db');
 
+    // Only mkdir if needed
+    if (!fs.existsSync(dbDir)) {
+      fs.mkdirSync(dbDir, { recursive: true });
+    }
+
+    const isNew = !fs.existsSync(dbPath);
     this.db = new Database(dbPath);
     this.db.pragma('journal_mode = WAL');
-    this.db.pragma('foreign_keys = ON');
 
-    this.initializeSchema();
-    this.setupTriggers();
-    logger.info(`Memory database ISOLATED for project: ${projectId} at ${dbPath}`);
+    // Only run schema creation for new databases
+    if (isNew) {
+      this.db.pragma('foreign_keys = ON');
+      this.initializeSchema();
+    }
+    // No setInterval — CLI commands are one-shot
   }
 
   private initializeSchema() {
@@ -122,12 +124,7 @@ export class MemoryDatabase {
     `);
   }
 
-  private setupTriggers() {
-    // Auto-cleanup expired memories
-    setInterval(() => {
-      this.cleanupExpired();
-    }, 60 * 60 * 1000); // Every hour
-  }
+  // No background timers — CLI is one-shot. Cleanup runs on save.
 
   save(params: {
     summary: string;
@@ -152,8 +149,8 @@ export class MemoryDatabase {
     ).get(dedupeHash, this.projectId);
 
     if (existing && typeof existing === 'object' && 'id' in existing) {
-      logger.info(`Duplicate memory detected, updating existing: ${(existing as any).id}`);
-      return this.update((existing as any).id as string, params);
+      // Duplicate — update existing
+      return this._update((existing as any).id as string, params);
     }
 
     // Calculate expiration
@@ -181,7 +178,8 @@ export class MemoryDatabase {
       dedupeHash
     );
 
-    logger.info(`Memory saved: ${id} - ${params.summary}`);
+    // Cleanup expired on save (instead of background timer)
+    this.cleanupExpired();
 
     // Return the complete memory object
     const memory: Memory = {
@@ -234,31 +232,48 @@ export class MemoryDatabase {
       }
     }
 
-    // Fallback 2: Try individual words (OR search)
+    // Fallback 2: Try prefix search — only for longer words (6+ chars) to avoid false matches
     const words = params.q.split(/\s+/).filter(word => word.length > 2);
-    if (words.length > 1) {
+    const longWords = words.filter(w => w.length >= 6);
+    if (longWords.length > 0) {
       try {
-        const orQuery = words.join(' OR ');
+        // Use first 5 chars as prefix — specific enough to avoid junk matches
+        const prefixQuery = longWords.map(w => w.substring(0, 5) + '*').join(' OR ');
+        const results = this.executeSearch({...params, q: prefixQuery});
+        if (results.length > 0) {
+          return results;
+        }
+      } catch {
+        // continue
+      }
+    }
+
+    // Fallback 3: Try meaningful words only (5+ chars, OR search)
+    const meaningfulWords = words.filter(w => w.length >= 5);
+    if (meaningfulWords.length > 0) {
+      try {
+        const orQuery = meaningfulWords.join(' OR ');
         const results = this.executeSearch({...params, q: orQuery});
         if (results.length > 0) {
           return results;
         }
-      } catch (error) {
-        console.warn('Fallback 2 failed:', error);
+      } catch {
+        // continue
       }
     }
 
-    // Fallback 3: Try broader search with just the first word
+    // Fallback 4: Try the longest word only
     if (words.length > 0) {
+      const longest = words.sort((a, b) => b.length - a.length)[0];
       try {
-        const results = this.executeSearch({...params, q: words[0]});
-        return results; // Return whatever we get, even if empty
-      } catch (error) {
-        console.warn('All fallbacks failed:', error);
+        const results = this.executeSearch({...params, q: longest});
+        return results;
+      } catch {
+        // all failed
       }
     }
 
-    return []; // No results found
+    return [];
   }
 
   searchWithDebug(params: {
@@ -314,10 +329,35 @@ export class MemoryDatabase {
       }
     }
 
-    // Fallback 2: Try individual words (OR search)
+    // Fallback 2: Try prefix search — only for longer words (6+ chars)
     const words = params.q.split(/\s+/).filter(word => word.length > 2);
-    if (words.length > 1) {
-      const orQuery = words.join(' OR ');
+    const longWords = words.filter(w => w.length >= 6);
+    if (longWords.length > 0) {
+      const prefixQuery = longWords.map(w => w.substring(0, 5) + '*').join(' OR ');
+      queries_tried.push(prefixQuery);
+      try {
+        const results = this.executeSearch({...params, q: prefixQuery});
+        if (results.length > 0) {
+          return {
+            results,
+            debug_info: {
+              original_query: params.q,
+              queries_tried,
+              fallback_used: 'prefix_search',
+              search_time_ms: Date.now() - startTime,
+              total_memories_scanned: this.getTotalMemoryCount()
+            }
+          };
+        }
+      } catch {
+        // Continue to next fallback
+      }
+    }
+
+    // Fallback 3: Try meaningful words only (5+ chars, OR search)
+    const meaningfulWords = words.filter(w => w.length >= 5);
+    if (meaningfulWords.length > 0) {
+      const orQuery = meaningfulWords.join(' OR ');
       queries_tried.push(orQuery);
       try {
         const results = this.executeSearch({...params, q: orQuery});
@@ -333,16 +373,17 @@ export class MemoryDatabase {
             }
           };
         }
-      } catch (error) {
+      } catch {
         // Continue to next fallback
       }
     }
 
-    // Fallback 3: Try broader search with just the first word
+    // Fallback 4: Try the longest word only
     if (words.length > 0) {
-      queries_tried.push(words[0]);
+      const longest = [...words].sort((a, b) => b.length - a.length)[0];
+      queries_tried.push(longest);
       try {
-        const results = this.executeSearch({...params, q: words[0]});
+        const results = this.executeSearch({...params, q: longest});
         return {
           results,
           debug_info: {
@@ -353,7 +394,7 @@ export class MemoryDatabase {
             total_memories_scanned: this.getTotalMemoryCount()
           }
         };
-      } catch (error) {
+      } catch {
         // All fallbacks failed
       }
     }
@@ -430,17 +471,40 @@ export class MemoryDatabase {
       queryParams.push(cwd + '/');
     }
 
-    query += ' ORDER BY fts_score DESC, m.importance DESC, m.created_at DESC LIMIT ?';
+    // Pinned memories (__pinned tag) surface first
+    query += ` ORDER BY (CASE WHEN m.tags LIKE '%__pinned%' THEN 0 ELSE 1 END), fts_score DESC, m.importance DESC, m.created_at DESC LIMIT ?`;
     queryParams.push(k);
 
     const stmt = this.db.prepare(query);
     const results = stmt.all(...queryParams) as any[];
 
-    return results.map(row => ({
-      memory: this.rowToMemory(row),
-      score: -row.fts_score, // BM25 returns negative scores
-      snippet: row.snippet
-    }));
+    // Compute meaningful relevance scores based on term overlap
+    const queryTerms = params.q.toLowerCase().replace(/[^\w\s]/g, '').split(/\s+/).filter(t => t.length > 1);
+
+    return results.map(row => {
+      const memory = this.rowToMemory(row);
+      const content = `${memory.summary} ${memory.text} ${memory.tags.join(' ')}`.toLowerCase();
+
+      // Score: what % of query terms appear in this memory?
+      let matched = 0;
+      for (const term of queryTerms) {
+        if (content.includes(term)) matched++;
+        // Bonus for exact word in tags
+        else if (memory.tags.some(t => t.toLowerCase().includes(term))) matched += 0.5;
+      }
+      const termScore = queryTerms.length > 0 ? matched / queryTerms.length : 0;
+
+      // Boost for importance
+      const importanceBoost = (memory.importance - 1) / 4 * 0.2; // 0-20% boost
+
+      const score = Math.min(1, termScore + importanceBoost);
+
+      return {
+        memory,
+        score: Math.round(score * 100), // 0-100%
+        snippet: row.snippet
+      };
+    });
   }
 
   getRecent(params: {
@@ -555,16 +619,16 @@ export class MemoryDatabase {
         }
       } catch (ftsError) {
         // FTS table might not exist, that's okay
-        logger.debug('FTS deletion skipped:', ftsError);
+        // FTS deletion skipped
       }
 
-      logger.info(`Memory deleted: ${id}`);
+      // deleted
       return {
         ok: result.changes > 0,
         message: result.changes > 0 ? 'Memory deleted successfully' : 'Memory not found'
       };
     } catch (error: any) {
-      logger.error(`Failed to delete memory ${id}:`, error);
+      // Failed to delete
       return {
         ok: false,
         message: `Error: ${error.message}`
@@ -572,7 +636,47 @@ export class MemoryDatabase {
     }
   }
 
-  private update(id: string, params: Partial<Memory>): { id: string } {
+  updateMemory(id: string, params: {
+    summary?: string;
+    text?: string;
+    tags?: string[];
+    paths?: string[];
+    importance?: number;
+  }): { ok: boolean; id: string; message?: string } {
+    // Check exists first
+    const existing = this.get(id);
+    if (!existing) {
+      return { ok: false, id, message: `Memory ${id} not found` };
+    }
+
+    const result = this._update(id, params);
+    return { ok: true, id: result.id };
+  }
+
+  pin(id: string, pinned: boolean): { ok: boolean; message?: string } {
+    const existing = this.get(id);
+    if (!existing) {
+      return { ok: false, message: `Memory ${id} not found` };
+    }
+
+    // Use importance 5 for pinned, restore original otherwise
+    // We store pin state via a special tag
+    const tags = existing.tags.filter(t => t !== '__pinned');
+    if (pinned) tags.push('__pinned');
+
+    this.db.prepare('UPDATE memories SET tags = ?, updated_at = ? WHERE id = ? AND project_id = ?')
+      .run(JSON.stringify(tags), Date.now(), id, this.projectId);
+
+    return { ok: true, message: pinned ? 'Memory pinned' : 'Memory unpinned' };
+  }
+
+  getAll(): Memory[] {
+    const stmt = this.db.prepare('SELECT * FROM memories WHERE project_id = ? ORDER BY created_at DESC');
+    const results = stmt.all(this.projectId) as any[];
+    return results.map(row => this.rowToMemory(row));
+  }
+
+  private _update(id: string, params: Partial<Memory>): { id: string } {
     const now = Date.now();
     const updates: string[] = ['updated_at = ?'];
     const values: any[] = [now];
@@ -616,7 +720,7 @@ export class MemoryDatabase {
     const result = stmt.run(now);
 
     if (result.changes > 0) {
-      logger.info(`Cleaned up ${result.changes} expired memories`);
+      // Cleaned up expired memories
     }
   }
 

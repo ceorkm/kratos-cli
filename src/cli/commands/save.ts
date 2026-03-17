@@ -11,7 +11,7 @@ export async function saveCommand(ctx: CLIContext, text: string, opts: {
   const paths = opts.paths ? opts.paths.split(',').map(p => p.trim()) : [];
   const importance = opts.importance ? parseInt(opts.importance, 10) : 3;
 
-  let summary = text.substring(0, 100);
+  let summary = text.substring(0, 200);
   let fullText = text;
 
   // If compress flag is set, use rule-based compression (pure logic, no AI)

@@ -75,28 +75,43 @@ export class Output {
     created_at?: number;
     score?: number;
     snippet?: string;
+    relevance?: string;
   }): void {
     const date = memory.created_at
       ? new Date(memory.created_at).toLocaleString()
       : 'unknown';
 
     console.log('');
-    console.log(
-      chalk.bold.white(`  ${memory.summary}`) +
-      (memory.score !== undefined ? chalk.dim(` (score: ${memory.score.toFixed(2)})`) : '')
-    );
+    // Score is already 0-100%
+    let relevanceTag = '';
+    if (memory.score !== undefined) {
+      const pct = memory.score;
+      if (pct >= 80) relevanceTag = chalk.green(` ${pct}%`);
+      else if (pct >= 50) relevanceTag = chalk.yellow(` ${pct}%`);
+      else if (pct > 0) relevanceTag = chalk.dim(` ${pct}%`);
+    }
+
+    console.log(chalk.bold.white(`  ${memory.summary}`) + relevanceTag);
     console.log(chalk.dim(`  ID: ${memory.id}  |  ${date}  |  importance: ${memory.importance ?? '?'}`));
 
     if (memory.tags && memory.tags.length > 0) {
-      console.log('  ' + memory.tags.map(t => chalk.cyan(`#${t}`)).join(' '));
+      const visibleTags = memory.tags.filter(t => t !== '__pinned');
+      const pinnedIcon = memory.tags.includes('__pinned') ? chalk.yellow('📌 ') : '';
+      if (visibleTags.length > 0 || pinnedIcon) {
+        console.log('  ' + pinnedIcon + visibleTags.map(t => chalk.cyan(`#${t}`)).join(' '));
+      }
     }
 
     if (memory.paths && memory.paths.length > 0) {
       console.log('  ' + chalk.dim('paths: ' + memory.paths.join(', ')));
     }
 
-    if (memory.snippet) {
-      console.log('  ' + chalk.dim(memory.snippet.substring(0, 120)));
+    if (memory.text) {
+      // Show full text (up to 300 chars) instead of truncated snippet
+      const display = memory.text.length > 300 ? memory.text.substring(0, 300) + '...' : memory.text;
+      console.log('  ' + chalk.dim(display));
+    } else if (memory.snippet) {
+      console.log('  ' + chalk.dim(memory.snippet));
     }
   }
 }

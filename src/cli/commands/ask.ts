@@ -1,12 +1,12 @@
 import type { CLIContext } from '../core.js';
 import { Output } from '../output.js';
+import chalk from 'chalk';
 
 export async function askCommand(ctx: CLIContext, question: string, opts: {
   limit?: string;
 }): Promise<void> {
   const limit = opts.limit ? parseInt(opts.limit, 10) : 10;
 
-  // Parse natural language query
   const parsed = parseNaturalLanguageQuery(question);
   const searchQuery = parsed.searchTerms.join(' ');
 
@@ -15,34 +15,80 @@ export async function askCommand(ctx: CLIContext, question: string, opts: {
     return;
   }
 
+  // Search with debug info
   const enhanced = ctx.memoryDb.searchWithDebug({
     q: searchQuery,
     k: limit,
-    tags: parsed.tags.length > 0 ? parsed.tags : undefined,
   });
 
-  Output.header(`Answer for: "${question}"`);
-  Output.dim(`Understood as: ${parsed.intent} → "${searchQuery}"${parsed.tags.length > 0 ? ` [tags: ${parsed.tags.join(', ')}]` : ''}`);
-  Output.dim(`Found ${enhanced.results.length} relevant memories`);
+  let results = enhanced.results;
 
-  for (const r of enhanced.results) {
-    Output.memoryCard({
-      id: r.memory.id,
-      summary: r.memory.summary,
-      tags: r.memory.tags,
-      paths: r.memory.paths,
-      importance: r.memory.importance,
-      created_at: r.memory.created_at,
-      score: r.score,
-      snippet: r.snippet,
-    });
+  // If no results, try broadening with meaningful words
+  if (results.length === 0) {
+    const meaningfulTerms = parsed.searchTerms.filter(t => t.length >= 5);
+    for (const term of meaningfulTerms) {
+      const fallback = ctx.memoryDb.search({ q: term, k: limit });
+      if (fallback.length > 0) {
+        results = fallback;
+        break;
+      }
+    }
   }
+
+  if (results.length === 0) {
+    Output.header(`Answer: "${question}"`);
+    Output.dim('No relevant memories found. Try different terms.');
+    return;
+  }
+
+  // Synthesize an answer from the results
+  console.log('');
+  console.log(chalk.bold.cyan(`  ${question}`));
+  console.log(chalk.dim('  ' + '─'.repeat(Math.min(question.length + 4, 60))));
+  console.log('');
+
+  // Build a coherent answer from the top results
+  const topResults = results.slice(0, 5);
+
+  // Compose the answer
+  if (topResults.length === 1) {
+    // Single result — just present it as the answer
+    const r = topResults[0];
+    console.log(`  ${r.memory.text || r.memory.summary}`);
+    if (r.memory.paths && r.memory.paths.length > 0) {
+      console.log(chalk.dim(`\n  Files: ${r.memory.paths.join(', ')}`));
+    }
+  } else {
+    // Multiple results — synthesize
+    for (let i = 0; i < topResults.length; i++) {
+      const r = topResults[i];
+      const text = r.memory.text || r.memory.summary;
+      const tags = r.memory.tags.filter(t => t !== '__pinned');
+      const tagStr = tags.length > 0 ? chalk.dim(` [${tags[0]}]`) : '';
+      const paths = r.memory.paths && r.memory.paths.length > 0
+        ? chalk.dim(`  → ${r.memory.paths[0]}`)
+        : '';
+
+      if (i === 0) {
+        // First result — present as the primary answer
+        console.log(`  ${text}${tagStr}`);
+        if (paths) console.log(paths);
+      } else {
+        // Additional context
+        console.log(`  ${chalk.white('•')} ${text}${tagStr}`);
+        if (paths) console.log(`  ${paths}`);
+      }
+    }
+  }
+
+  // Footer
+  console.log('');
+  console.log(chalk.dim(`  Based on ${results.length} memor${results.length === 1 ? 'y' : 'ies'} | searched: "${searchQuery}"`));
+  console.log('');
 }
 
 function parseNaturalLanguageQuery(question: string): {
   searchTerms: string[];
-  tags: string[];
-  timeframe?: string;
   intent: 'search' | 'list' | 'explain' | 'find';
 } {
   const lowerQ = question.toLowerCase();
@@ -52,27 +98,18 @@ function parseNaturalLanguageQuery(question: string): {
     'find', 'get', 'about', 'in', 'on', 'at', 'to', 'for', 'with',
     'by', 'from', 'did', 'do', 'does', 'is', 'are', 'was', 'were',
     'have', 'has', 'had', 'can', 'could', 'would', 'should', 'will',
-    'know', 'tell', 'give', 'learned', 'remember', 'recall',
+    'know', 'tell', 'give', 'learned', 'remember', 'recall', 'work',
   ]);
-  const words = question.split(/\s+/).filter(
-    word => word.length > 2 && !stopWords.has(word.toLowerCase())
-  );
+
+  const words = question
+    .replace(/[^\w\s]/g, '')
+    .split(/\s+/)
+    .filter(word => word.length > 2 && !stopWords.has(word.toLowerCase()));
 
   let intent: 'search' | 'list' | 'explain' | 'find' = 'search';
   if (lowerQ.includes('show me') || lowerQ.includes('list')) intent = 'list';
   else if (lowerQ.includes('explain') || lowerQ.includes('what is')) intent = 'explain';
   else if (lowerQ.includes('find') || lowerQ.includes('where')) intent = 'find';
 
-  let timeframe: string | undefined;
-  if (lowerQ.includes('today')) timeframe = 'today';
-  else if (lowerQ.includes('yesterday')) timeframe = 'yesterday';
-  else if (lowerQ.includes('this week')) timeframe = 'week';
-
-  const tags: string[] = [];
-  const techTerms = ['bug', 'error', 'fix', 'debug', 'feature', 'api', 'database', 'auth', 'ui', 'frontend', 'backend'];
-  for (const term of techTerms) {
-    if (lowerQ.includes(term)) tags.push(term);
-  }
-
-  return { searchTerms: words, tags, timeframe, intent };
+  return { searchTerms: words, intent };
 }

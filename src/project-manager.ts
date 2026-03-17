@@ -1,9 +1,6 @@
-import { Logger } from './utils/logger.js';
 import path from 'path';
-import fs from 'fs-extra';
+import fs from 'node:fs';
 import crypto from 'crypto';
-
-const logger = new Logger('ProjectManager');
 
 export interface Project {
   id: string;
@@ -15,23 +12,20 @@ export interface Project {
 
 /**
  * Smart Project Manager - Handles project isolation and auto-detection
- *
- * KEY FEATURES:
- * - Each project gets COMPLETELY ISOLATED database
- * - Auto-detects project from working directory
- * - No memory pollution between projects
- * - Clean project switching
+ * Optimized for CLI: no eager loading, minimal I/O
  */
 export class ProjectManager {
   private kratosHome: string;
   private currentProject: Project | null = null;
-  private projectsCache: Map<string, Project> = new Map();
+  private projectsCache: Map<string, Project> | null = null; // Lazy — only loaded when needed
 
   constructor() {
-    // All Kratos data lives in user home, organized by project
     this.kratosHome = path.join(process.env.HOME || process.env.USERPROFILE || '', '.kratos');
-    fs.ensureDirSync(this.kratosHome);
-    this.loadProjectsCache();
+    // Only mkdir if it doesn't exist (avoid sync I/O when possible)
+    if (!fs.existsSync(this.kratosHome)) {
+      fs.mkdirSync(this.kratosHome, { recursive: true });
+    }
+    // DON'T load projects cache here — load lazily when needed
   }
 
   /**
@@ -41,24 +35,16 @@ export class ProjectManager {
   async detectProject(workingDir?: string): Promise<Project> {
     const dir = workingDir || process.cwd();
 
-    // Look for project markers in order of preference
-    const markers = [
-      '.git',           // Git repo
-      'package.json',   // Node project
-      'Cargo.toml',     // Rust project
-      'go.mod',         // Go project
-      'pyproject.toml', // Python project
-      '.kratos',        // Existing Kratos project
-    ];
+    // Look for project markers — use sync fs.existsSync (faster than async for local files)
+    const markers = ['.git', 'package.json', 'Cargo.toml', 'go.mod', 'pyproject.toml', '.kratos'];
 
     let projectRoot = dir;
     let found = false;
 
-    // Walk up directory tree to find project root
     let currentDir = dir;
     while (currentDir !== path.dirname(currentDir)) {
       for (const marker of markers) {
-        if (await fs.pathExists(path.join(currentDir, marker))) {
+        if (fs.existsSync(path.join(currentDir, marker))) {
           projectRoot = currentDir;
           found = true;
           break;
@@ -68,15 +54,25 @@ export class ProjectManager {
       currentDir = path.dirname(currentDir);
     }
 
-    // Generate stable project ID from path
     const projectId = this.generateProjectId(projectRoot);
     const projectName = path.basename(projectRoot);
 
-    // Check if we already know this project
-    let project = this.projectsCache.get(projectId);
+    // Check project dir directly on disk — skip loading entire cache
+    const projectDir = this.getProjectDir(projectId);
+    const projectJsonPath = path.join(projectDir, 'project.json');
 
-    if (!project) {
-      // New project - create it
+    let project: Project;
+
+    if (fs.existsSync(projectJsonPath)) {
+      // Known project — read just this one project's metadata
+      const raw = JSON.parse(fs.readFileSync(projectJsonPath, 'utf-8'));
+      project = {
+        ...raw,
+        createdAt: new Date(raw.createdAt),
+        lastAccessed: new Date()
+      };
+    } else {
+      // New project
       project = {
         id: projectId,
         name: projectName,
@@ -86,26 +82,16 @@ export class ProjectManager {
       };
 
       // Create isolated project directory
-      const projectDir = this.getProjectDir(projectId);
-      await fs.ensureDir(projectDir);
+      fs.mkdirSync(projectDir, { recursive: true });
 
       // Save project metadata
-      await fs.writeJson(
-        path.join(projectDir, 'project.json'),
-        project,
-        { spaces: 2 }
-      );
+      fs.writeFileSync(projectJsonPath, JSON.stringify(project, null, 2));
 
-      this.projectsCache.set(projectId, project);
-      logger.info(`Created new project: ${projectName} (${projectId})`);
-    } else {
-      // Update last accessed
-      project.lastAccessed = new Date();
+      // Update the global projects cache file (append this project)
+      this.ensureProjectInCache(project);
     }
 
     this.currentProject = project;
-    this.saveProjectsCache();
-
     return project;
   }
 
@@ -113,12 +99,13 @@ export class ProjectManager {
    * Switch to a different project
    */
   async switchProject(projectIdOrPath: string): Promise<Project> {
-    // Check if it's a project ID
-    let project = this.projectsCache.get(projectIdOrPath);
+    // Check if it's a project ID — look in cache
+    const cache = this.getProjectsCache();
+    let project = cache.get(projectIdOrPath);
 
     if (!project) {
-      // Maybe it's a path - detect project from it
-      if (await fs.pathExists(projectIdOrPath)) {
+      // Maybe it's a path
+      if (fs.existsSync(projectIdOrPath)) {
         project = await this.detectProject(projectIdOrPath);
       } else {
         throw new Error(`Project not found: ${projectIdOrPath}`);
@@ -129,7 +116,6 @@ export class ProjectManager {
     project.lastAccessed = new Date();
     this.saveProjectsCache();
 
-    logger.info(`Switched to project: ${project.name}`);
     return project;
   }
 
@@ -155,10 +141,10 @@ export class ProjectManager {
   }
 
   /**
-   * List all known projects
+   * List all known projects (loads cache on first call)
    */
   listProjects(): Project[] {
-    return Array.from(this.projectsCache.values())
+    return Array.from(this.getProjectsCache().values())
       .sort((a, b) => b.lastAccessed.getTime() - a.lastAccessed.getTime());
   }
 
@@ -180,17 +166,15 @@ export class ProjectManager {
 
     if (!options.keepMemories) {
       const memoriesDb = path.join(projectDir, 'databases', 'memories.db');
-      if (await fs.pathExists(memoriesDb)) {
-        await fs.remove(memoriesDb);
-        logger.info(`Cleaned up memories for project ${projectId}`);
+      if (fs.existsSync(memoriesDb)) {
+        fs.unlinkSync(memoriesDb);
       }
     }
 
     if (!options.keepConcepts) {
       const conceptsDb = path.join(projectDir, 'databases', 'concepts.db');
-      if (await fs.pathExists(conceptsDb)) {
-        await fs.remove(conceptsDb);
-        logger.info(`Cleaned up concepts for project ${projectId}`);
+      if (fs.existsSync(conceptsDb)) {
+        fs.unlinkSync(conceptsDb);
       }
     }
   }
@@ -206,14 +190,17 @@ export class ProjectManager {
   }
 
   /**
-   * Load projects cache from disk
+   * Get projects cache — lazy loaded on first access
    */
-  private loadProjectsCache(): void {
+  private getProjectsCache(): Map<string, Project> {
+    if (this.projectsCache) return this.projectsCache;
+
+    this.projectsCache = new Map();
     const cacheFile = path.join(this.kratosHome, 'projects.json');
 
     if (fs.existsSync(cacheFile)) {
       try {
-        const cache = fs.readJsonSync(cacheFile);
+        const cache = JSON.parse(fs.readFileSync(cacheFile, 'utf-8'));
         for (const project of cache.projects || []) {
           this.projectsCache.set(project.id, {
             ...project,
@@ -221,10 +208,34 @@ export class ProjectManager {
             lastAccessed: new Date(project.lastAccessed)
           });
         }
-        logger.info(`Loaded ${this.projectsCache.size} projects from cache`);
-      } catch (error) {
-        logger.error('Failed to load projects cache:', error);
+      } catch {
+        // Corrupted cache — start fresh
       }
+    }
+    return this.projectsCache;
+  }
+
+  /**
+   * Ensure a single project is registered in the global cache file
+   * (append without loading all projects into memory)
+   */
+  private ensureProjectInCache(project: Project): void {
+    const cacheFile = path.join(this.kratosHome, 'projects.json');
+    let cache: { projects: any[]; lastUpdated: Date } = { projects: [], lastUpdated: new Date() };
+
+    if (fs.existsSync(cacheFile)) {
+      try {
+        cache = JSON.parse(fs.readFileSync(cacheFile, 'utf-8'));
+      } catch {
+        // Corrupted — start fresh
+      }
+    }
+
+    // Only add if not already there
+    if (!cache.projects.some((p: any) => p.id === project.id)) {
+      cache.projects.push(project);
+      cache.lastUpdated = new Date();
+      fs.writeFileSync(cacheFile, JSON.stringify(cache, null, 2));
     }
   }
 
@@ -234,14 +245,14 @@ export class ProjectManager {
   private saveProjectsCache(): void {
     const cacheFile = path.join(this.kratosHome, 'projects.json');
     const cache = {
-      projects: Array.from(this.projectsCache.values()),
+      projects: Array.from(this.getProjectsCache().values()),
       lastUpdated: new Date()
     };
 
     try {
-      fs.writeJsonSync(cacheFile, cache, { spaces: 2 });
-    } catch (error) {
-      logger.error('Failed to save projects cache:', error);
+      fs.writeFileSync(cacheFile, JSON.stringify(cache, null, 2));
+    } catch {
+      // Silently fail — non-critical
     }
   }
 
@@ -257,16 +268,9 @@ export class ProjectManager {
    */
   async updateKratosHome(newPath: string): Promise<void> {
     this.kratosHome = newPath;
+    fs.mkdirSync(this.kratosHome, { recursive: true });
 
-    // Ensure the new directory exists
-    await fs.ensureDir(this.kratosHome);
-
-    // Clear cache as project paths may have changed
-    this.projectsCache.clear();
-
-    // Reload cache from new location
-    this.loadProjectsCache();
-
-    logger.info(`Updated Kratos home to: ${this.kratosHome}`);
+    // Reset cache so it reloads from new location
+    this.projectsCache = null;
   }
 }
