@@ -1,12 +1,19 @@
 import type { CLIContext } from '../core.js';
 import { Output } from '../output.js';
 
-export async function getCommand(ctx: CLIContext, id: string): Promise<void> {
+export async function getCommand(ctx: CLIContext, id: string, opts: {
+  json?: boolean;
+} = {}): Promise<void> {
   const memory = ctx.memoryDb.get(id);
 
   if (!memory) {
     Output.error(`Memory not found: ${id}`);
     process.exit(1);
+  }
+
+  if (opts.json) {
+    Output.json(memory);
+    return;
   }
 
   Output.header('Memory Details');

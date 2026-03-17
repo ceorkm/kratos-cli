@@ -2,7 +2,9 @@ import type { CLIContext } from '../core.js';
 import { Output } from '../output.js';
 import chalk from 'chalk';
 
-export async function summaryCommand(ctx: CLIContext): Promise<void> {
+export async function summaryCommand(ctx: CLIContext, opts: {
+  json?: boolean;
+} = {}): Promise<void> {
   const memories = ctx.memoryDb.getAll();
 
   if (memories.length === 0) {
@@ -38,16 +40,50 @@ export async function summaryCommand(ctx: CLIContext): Promise<void> {
     .sort((a, b) => b[1].length - a[1].length)
     .slice(0, 8);
 
+  // One-line project overview
+  const totalTags = new Set(memories.flatMap(m => m.tags.filter(t => t !== '__pinned')));
+  const oldest = new Date(Math.min(...memories.map(m => m.created_at)));
+  const newest = new Date(Math.max(...memories.map(m => m.created_at)));
+  const recent = memories.slice(0, 5);
+
+  if (opts.json) {
+    Output.json({
+      project: ctx.project.name,
+      memory_count: memories.length,
+      topic_count: totalTags.size,
+      date_range: {
+        oldest: oldest.toISOString(),
+        newest: newest.toISOString(),
+      },
+      pinned: pinned.map(m => ({
+        id: m.id,
+        summary: m.summary,
+        text: m.text,
+        tags: m.tags,
+      })),
+      key_decisions: keyDecisions.map(m => ({
+        id: m.id,
+        summary: m.summary,
+        text: m.text,
+        tags: m.tags.filter(t => t !== '__pinned'),
+        importance: m.importance,
+      })),
+      topics: topics.map(([tag, mems]) => ({ tag, count: mems.length })),
+      recent: recent.map(m => ({
+        id: m.id,
+        summary: m.summary,
+        created_at: m.created_at,
+      })),
+    });
+    return;
+  }
+
   // Build the brief
   console.log('');
   console.log(chalk.bold.cyan(`  ${ctx.project.name.toUpperCase()} — Project Brief`));
   console.log(chalk.dim('  ' + '━'.repeat(40)));
   console.log('');
 
-  // One-line project overview
-  const totalTags = new Set(memories.flatMap(m => m.tags.filter(t => t !== '__pinned')));
-  const oldest = new Date(Math.min(...memories.map(m => m.created_at)));
-  const newest = new Date(Math.max(...memories.map(m => m.created_at)));
   console.log(chalk.dim(`  ${memories.length} memories | ${totalTags.size} topics | ${oldest.toLocaleDateString()} — ${newest.toLocaleDateString()}`));
   console.log('');
 
@@ -82,7 +118,6 @@ export async function summaryCommand(ctx: CLIContext): Promise<void> {
   }
 
   // Recent activity — just dates and summaries
-  const recent = memories.slice(0, 5);
   console.log(chalk.bold.white('  RECENT'));
   for (const m of recent) {
     const date = new Date(m.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });

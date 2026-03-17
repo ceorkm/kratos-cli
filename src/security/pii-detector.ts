@@ -16,6 +16,12 @@ export interface Finding {
   redacted: string;
 }
 
+interface CandidateFinding extends Finding {
+  start: number;
+  end: number;
+  priority: number;
+}
+
 /**
  * PII and Secret Detection with entropy analysis
  */
@@ -78,27 +84,29 @@ export class PIIDetector {
    * Detect PII and secrets in text
    */
   detect(text: string): DetectionResult {
-    const findings: Finding[] = [];
-    let redactedText = text;
+    const candidates: CandidateFinding[] = [];
 
     // Check PII patterns
     for (const pattern of this.piiPatterns) {
       const matches = text.matchAll(pattern.regex);
       for (const match of matches) {
         const value = match[0];
+        const start = match.index ?? -1;
+        if (start < 0) continue;
 
         // Skip if in allowlist
         if (this.allowlist.has(value)) continue;
 
         const redacted = this.redact(value, pattern.type as 'pii' | 'secret');
-        findings.push({
+        candidates.push({
+          start,
+          end: start + value.length,
+          priority: 1,
           type: pattern.type as 'pii' | 'secret',
           pattern: pattern.name,
           confidence: 0.9,
           redacted
         });
-
-        redactedText = redactedText.replace(value, redacted);
       }
     }
 
@@ -107,6 +115,8 @@ export class PIIDetector {
       const matches = text.matchAll(pattern.regex);
       for (const match of matches) {
         const value = match[0];
+        const start = match.index ?? -1;
+        if (start < 0) continue;
 
         // Skip if in allowlist
         if (this.allowlist.has(value)) continue;
@@ -117,14 +127,15 @@ export class PIIDetector {
         }
 
         const redacted = this.redact(value, pattern.type as 'pii' | 'secret');
-        findings.push({
+        candidates.push({
+          start,
+          end: start + value.length,
+          priority: 3,
           type: pattern.type as 'pii' | 'secret',
           pattern: pattern.name,
           confidence: pattern.entropyCheck ? 0.7 : 0.9,
           redacted
         });
-
-        redactedText = redactedText.replace(value, redacted);
       }
     }
 
@@ -133,16 +144,29 @@ export class PIIDetector {
     for (const str of highEntropyStrings) {
       if (this.allowlist.has(str)) continue;
 
+      const start = text.indexOf(str);
+      if (start < 0) continue;
+
       const redacted = this.redact(str, 'secret');
-      findings.push({
+      candidates.push({
+        start,
+        end: start + str.length,
+        priority: 2,
         type: 'high-entropy',
         pattern: 'High Entropy String',
         confidence: 0.6,
         redacted
       });
-
-      redactedText = redactedText.replace(str, redacted);
     }
+
+    const accepted = this.resolveCandidates(candidates);
+    const redactedText = this.applyRedactions(text, accepted);
+    const findings = accepted.map(({ type, pattern, confidence, redacted }) => ({
+      type,
+      pattern,
+      confidence,
+      redacted
+    }));
 
     return {
       hasPII: findings.some(f => f.type === 'pii'),
@@ -150,6 +174,40 @@ export class PIIDetector {
       redactedText,
       findings
     };
+  }
+
+  private resolveCandidates(candidates: CandidateFinding[]): CandidateFinding[] {
+    const accepted: CandidateFinding[] = [];
+
+    const ordered = [...candidates].sort((a, b) => {
+      if (b.priority !== a.priority) return b.priority - a.priority;
+      if (b.confidence !== a.confidence) return b.confidence - a.confidence;
+      const lengthDiff = (b.end - b.start) - (a.end - a.start);
+      if (lengthDiff !== 0) return lengthDiff;
+      return a.start - b.start;
+    });
+
+    for (const candidate of ordered) {
+      const overlaps = accepted.some(existing =>
+        candidate.start < existing.end && candidate.end > existing.start
+      );
+      if (!overlaps) {
+        accepted.push(candidate);
+      }
+    }
+
+    return accepted.sort((a, b) => a.start - b.start);
+  }
+
+  private applyRedactions(text: string, findings: CandidateFinding[]): string {
+    if (findings.length === 0) return text;
+
+    let result = text;
+    const ordered = [...findings].sort((a, b) => b.start - a.start);
+    for (const finding of ordered) {
+      result = result.slice(0, finding.start) + finding.redacted + result.slice(finding.end);
+    }
+    return result;
   }
 
   /**

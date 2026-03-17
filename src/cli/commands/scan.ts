@@ -4,9 +4,21 @@ import chalk from 'chalk';
 
 export async function scanCommand(ctx: CLIContext, text: string, opts: {
   redact?: boolean;
+  json?: boolean;
 }): Promise<void> {
   const piiDetector = await ctx.getPIIDetector();
   const result = piiDetector.detect(text);
+
+  if (opts.json) {
+    Output.json({
+      ok: !result.hasPII && !result.hasSecrets,
+      has_pii: result.hasPII,
+      has_secrets: result.hasSecrets,
+      findings: result.findings,
+      redacted_text: opts.redact ? result.redactedText : null,
+    });
+    return;
+  }
 
   Output.header('Security Scan Results');
 

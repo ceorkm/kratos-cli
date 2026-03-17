@@ -6,6 +6,7 @@ export async function saveCommand(ctx: CLIContext, text: string, opts: {
   paths?: string;
   importance?: string;
   compress?: boolean;
+  json?: boolean;
 }): Promise<void> {
   const tags = opts.tags ? opts.tags.split(',').map(t => t.trim()) : [];
   const paths = opts.paths ? opts.paths.split(',').map(p => p.trim()) : [];
@@ -35,6 +36,23 @@ export async function saveCommand(ctx: CLIContext, text: string, opts: {
     importance,
   });
 
-  Output.success(`Memory saved: ${(result as any).id}`);
+  const id = (result as any).id;
+
+  if (opts.json) {
+    Output.json({
+      ok: true,
+      id,
+      project: ctx.project.name,
+      summary,
+      text: fullText,
+      tags,
+      paths,
+      importance,
+      compressed: !!opts.compress,
+    });
+    return;
+  }
+
+  Output.success(`Memory saved: ${id}`);
   Output.dim(`Project: ${ctx.project.name} | Tags: ${tags.join(', ') || 'none'} | Importance: ${importance}`);
 }

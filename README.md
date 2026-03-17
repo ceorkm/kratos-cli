@@ -50,16 +50,18 @@ That's it. No global install needed. Auto-detects your project.
 
 | Command | What it does |
 |---------|-------------|
-| `npx kratos-memory save <text>` | Save a memory (`--tags`, `--importance 1-5`, `--paths`, `--compress`) |
-| `npx kratos-memory search <query>` | Full-text search with FTS5 (`--limit`, `--tags`, `--debug`) |
-| `npx kratos-memory ask <question>` | Natural language query |
-| `npx kratos-memory recent` | Recent memories (`--limit`) |
-| `npx kratos-memory get <id>` | Full memory details |
-| `npx kratos-memory forget <id>` | Delete a memory |
-| `npx kratos-memory status` | System dashboard |
-| `npx kratos-memory switch <path>` | Switch project |
-| `npx kratos-memory scan <text>` | Detect PII and secrets (`--redact`) |
+| `npx kratos-memory save <text>` | Save a memory (`--tags`, `--importance 1-5`, `--paths`, `--compress`, `--json`) |
+| `npx kratos-memory search <query>` | Full-text search with FTS5 (`--limit`, `--tags`, `--debug`, `--json`) |
+| `npx kratos-memory ask <question>` | Natural language query (`--json`) |
+| `npx kratos-memory recent` | Recent memories (`--limit`, `--json`) |
+| `npx kratos-memory get <id>` | Full memory details (`--json`) |
+| `npx kratos-memory forget <id>` | Delete a memory (`--json`) |
+| `npx kratos-memory status` | System dashboard (`--json`) |
+| `npx kratos-memory switch <path>` | Switch project (`--json`) |
+| `npx kratos-memory scan <text>` | Detect PII and secrets (`--redact`, `--json`) |
 | `npx kratos-memory hooks install` | Install auto-capture hooks |
+
+Kratos also supports machine-readable output for automation-heavy workflows. Use `--json` on the core read/write commands when you want agents, scripts, or CI to parse results safely.
 
 ## How agents use it
 

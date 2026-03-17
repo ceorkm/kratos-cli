@@ -4,6 +4,7 @@ import chalk from 'chalk';
 
 export async function askCommand(ctx: CLIContext, question: string, opts: {
   limit?: string;
+  json?: boolean;
 }): Promise<void> {
   const limit = opts.limit ? parseInt(opts.limit, 10) : 10;
 
@@ -11,6 +12,17 @@ export async function askCommand(ctx: CLIContext, question: string, opts: {
   const searchQuery = parsed.searchTerms.join(' ');
 
   if (!searchQuery) {
+    if (opts.json) {
+      Output.json({
+        question,
+        search_query: '',
+        count: 0,
+        answer: null,
+        results: [],
+        error: 'Could not extract search terms from your question. Try rephrasing.',
+      });
+      return;
+    }
     Output.warn('Could not extract search terms from your question. Try rephrasing.');
     return;
   }
@@ -36,8 +48,41 @@ export async function askCommand(ctx: CLIContext, question: string, opts: {
   }
 
   if (results.length === 0) {
+    if (opts.json) {
+      Output.json({
+        question,
+        search_query: searchQuery,
+        count: 0,
+        answer: null,
+        results: [],
+      });
+      return;
+    }
     Output.header(`Answer: "${question}"`);
     Output.dim('No relevant memories found. Try different terms.');
+    return;
+  }
+
+  if (opts.json) {
+    const topResults = results.slice(0, 5);
+    Output.json({
+      question,
+      search_query: searchQuery,
+      count: results.length,
+      answer: synthesizeAnswer(topResults),
+      results: topResults.map(r => ({
+        id: r.memory.id,
+        summary: r.memory.summary,
+        text: r.memory.text,
+        tags: r.memory.tags,
+        paths: r.memory.paths,
+        importance: r.memory.importance,
+        created_at: r.memory.created_at,
+        updated_at: r.memory.updated_at,
+        score: r.score,
+        snippet: r.snippet,
+      })),
+    });
     return;
   }
 
@@ -85,6 +130,21 @@ export async function askCommand(ctx: CLIContext, question: string, opts: {
   console.log('');
   console.log(chalk.dim(`  Based on ${results.length} memor${results.length === 1 ? 'y' : 'ies'} | searched: "${searchQuery}"`));
   console.log('');
+}
+
+function synthesizeAnswer(results: Array<{ memory: { summary: string; text: string; tags: string[]; paths: string[] } }>): string {
+  if (results.length === 0) return '';
+  if (results.length === 1) {
+    return results[0].memory.text || results[0].memory.summary;
+  }
+
+  return results
+    .slice(0, 5)
+    .map((result, index) => {
+      const text = result.memory.text || result.memory.summary;
+      return index === 0 ? text : `• ${text}`;
+    })
+    .join('\n');
 }
 
 function parseNaturalLanguageQuery(question: string): {

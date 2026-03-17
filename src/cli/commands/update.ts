@@ -5,6 +5,7 @@ export async function updateCommand(ctx: CLIContext, id: string, text: string, o
   tags?: string;
   importance?: string;
   paths?: string;
+  json?: boolean;
 }): Promise<void> {
   const params: any = {};
 
@@ -25,8 +26,29 @@ export async function updateCommand(ctx: CLIContext, id: string, text: string, o
   const result = ctx.memoryDb.updateMemory(id, params);
 
   if (result.ok) {
+    if (opts.json) {
+      Output.json({
+        ok: true,
+        id,
+        text: params.text ?? null,
+        summary: params.summary ?? null,
+        tags: params.tags ?? null,
+        paths: params.paths ?? null,
+        importance: params.importance ?? null,
+      });
+      return;
+    }
     Output.success(`Memory updated: ${id}`);
   } else {
+    if (opts.json) {
+      Output.json({
+        ok: false,
+        id,
+        error: result.message || 'Update failed',
+      });
+      process.exit(1);
+    }
     Output.error(result.message || 'Update failed');
+    process.exit(1);
   }
 }

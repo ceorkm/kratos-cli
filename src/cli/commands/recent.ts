@@ -4,6 +4,7 @@ import { Output } from '../output.js';
 export async function recentCommand(ctx: CLIContext, opts: {
   limit?: string;
   pathPrefix?: string;
+  json?: boolean;
 }): Promise<void> {
   const k = opts.limit ? parseInt(opts.limit, 10) : 10;
 
@@ -11,6 +12,15 @@ export async function recentCommand(ctx: CLIContext, opts: {
     k,
     path_prefix: opts.pathPrefix,
   });
+
+  if (opts.json) {
+    Output.json({
+      project: ctx.project.name,
+      count: memories.length,
+      memories,
+    });
+    return;
+  }
 
   Output.header(`Recent memories (${ctx.project.name})`);
   Output.dim(`Showing ${memories.length} of last ${k} requested`);

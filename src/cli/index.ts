@@ -41,6 +41,7 @@ program
   .option('-p, --paths <paths>', 'Comma-separated file paths')
   .option('-i, --importance <level>', 'Importance 1-5 (default: 3)')
   .option('-c, --compress', 'Compress text before saving')
+  .option('-j, --json', 'Output JSON')
   .action(async (text: string, opts) => {
     const ctx = await initCLIContext();
     const { saveCommand } = await import('./commands/save.js');
@@ -54,6 +55,7 @@ program
   .option('-l, --limit <n>', 'Max results (default: 10)')
   .option('-t, --tags <tags>', 'Filter by tags')
   .option('-d, --debug', 'Show debug info')
+  .option('-j, --json', 'Output JSON')
   .option('--path-match', 'Require path matching')
   .action(async (query: string, opts) => {
     const ctx = await initCLIContext();
@@ -66,6 +68,7 @@ program
   .command('ask <question>')
   .description('Ask a natural language question about your memories')
   .option('-l, --limit <n>', 'Max results (default: 10)')
+  .option('-j, --json', 'Output JSON')
   .action(async (question: string, opts) => {
     const ctx = await initCLIContext();
     const { askCommand } = await import('./commands/ask.js');
@@ -78,6 +81,7 @@ program
   .description('Get recent memories')
   .option('-l, --limit <n>', 'Max results (default: 10)')
   .option('--path-prefix <prefix>', 'Filter by path prefix')
+  .option('-j, --json', 'Output JSON')
   .action(async (opts) => {
     const ctx = await initCLIContext();
     const { recentCommand } = await import('./commands/recent.js');
@@ -88,10 +92,11 @@ program
 program
   .command('get <id>')
   .description('Get a specific memory by ID')
-  .action(async (id: string) => {
+  .option('-j, --json', 'Output JSON')
+  .action(async (id: string, opts) => {
     const ctx = await initCLIContext();
     const { getCommand } = await import('./commands/get.js');
-    await getCommand(ctx, id);
+    await getCommand(ctx, id, opts);
   });
 
 // ─── update ─────────────────────────────────────────────
@@ -101,6 +106,7 @@ program
   .option('-t, --tags <tags>', 'Replace tags (comma-separated)')
   .option('-i, --importance <level>', 'Update importance 1-5')
   .option('-p, --paths <paths>', 'Replace file paths (comma-separated)')
+  .option('-j, --json', 'Output JSON')
   .action(async (id: string, text: string, opts) => {
     const ctx = await initCLIContext();
     const { updateCommand } = await import('./commands/update.js');
@@ -112,6 +118,7 @@ program
   .command('pin <id>')
   .description('Pin a memory — pinned memories always surface first')
   .option('-u, --unpin', 'Unpin the memory')
+  .option('-j, --json', 'Output JSON')
   .action(async (id: string, opts) => {
     const ctx = await initCLIContext();
     const { pinCommand } = await import('./commands/pin.js');
@@ -132,40 +139,44 @@ program
 program
   .command('summary')
   .description('Generate a project summary from all memories')
-  .action(async () => {
+  .option('-j, --json', 'Output JSON')
+  .action(async (opts) => {
     const ctx = await initCLIContext();
     const { summaryCommand } = await import('./commands/summary.js');
-    await summaryCommand(ctx);
+    await summaryCommand(ctx, opts);
   });
 
 // ─── forget ─────────────────────────────────────────────
 program
   .command('forget <id>')
   .description('Delete a memory by ID')
-  .action(async (id: string) => {
+  .option('-j, --json', 'Output JSON')
+  .action(async (id: string, opts) => {
     const ctx = await initCLIContext();
     const { forgetCommand } = await import('./commands/forget.js');
-    await forgetCommand(ctx, id);
+    await forgetCommand(ctx, id, opts);
   });
 
 // ─── status ─────────────────────────────────────────────
 program
   .command('status')
   .description('Show system status and statistics')
-  .action(async () => {
+  .option('-j, --json', 'Output JSON')
+  .action(async (opts) => {
     const ctx = await initCLIContext();
     const { statusCommand } = await import('./commands/status.js');
-    await statusCommand(ctx);
+    await statusCommand(ctx, opts);
   });
 
 // ─── switch ─────────────────────────────────────────────
 program
   .command('switch <project>')
   .description('Switch to a different project')
-  .action(async (projectPath: string) => {
+  .option('-j, --json', 'Output JSON')
+  .action(async (projectPath: string, opts) => {
     const ctx = await initCLIContext();
     const { switchCommand } = await import('./commands/switch.js');
-    await switchCommand(ctx, projectPath);
+    await switchCommand(ctx, projectPath, opts);
   });
 
 // ─── scan ───────────────────────────────────────────────
@@ -173,6 +184,7 @@ program
   .command('scan <text>')
   .description('Scan text for PII and secrets')
   .option('-r, --redact', 'Show redacted version')
+  .option('-j, --json', 'Output JSON')
   .action(async (text: string, opts) => {
     const ctx = await initCLIContext();
     const { scanCommand } = await import('./commands/scan.js');

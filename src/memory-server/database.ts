@@ -55,10 +55,13 @@ export class MemoryDatabase {
     this.db = new Database(dbPath);
     this.db.pragma('journal_mode = WAL');
 
-    // Only run schema creation for new databases
+    this.db.pragma('foreign_keys = ON');
+
+    // Keep schema and FTS triggers healthy for both new and existing databases.
     if (isNew) {
-      this.db.pragma('foreign_keys = ON');
       this.initializeSchema();
+    } else {
+      this.ensureSchema();
     }
     // No setInterval — CLI commands are one-shot
   }
@@ -87,7 +90,36 @@ export class MemoryDatabase {
       CREATE INDEX IF NOT EXISTS idx_mem_dedupe ON memories(dedupe_hash);
     `);
 
-    // Full-text search virtual table - INCLUDING TAGS for better search
+    this.ensureFTSInfrastructure();
+  }
+
+  private ensureSchema() {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS memories (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        text TEXT NOT NULL,
+        tags TEXT DEFAULT '[]',
+        paths TEXT DEFAULT '[]',
+        importance INTEGER DEFAULT 3 CHECK(importance >= 1 AND importance <= 5),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        ttl INTEGER,
+        expires_at INTEGER,
+        dedupe_hash TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_mem_project ON memories(project_id);
+      CREATE INDEX IF NOT EXISTS idx_mem_expires ON memories(expires_at) WHERE expires_at IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_mem_importance ON memories(importance DESC, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_mem_dedupe ON memories(dedupe_hash);
+    `);
+
+    this.ensureFTSInfrastructure();
+  }
+
+  private ensureFTSInfrastructure() {
     this.db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS mem_fts USING fts5(
         summary,
@@ -98,8 +130,11 @@ export class MemoryDatabase {
         tokenize='porter unicode61'
       );
 
-      -- Triggers to keep FTS in sync - now including tags
-      CREATE TRIGGER IF NOT EXISTS mem_fts_insert AFTER INSERT ON memories BEGIN
+      DROP TRIGGER IF EXISTS mem_fts_insert;
+      DROP TRIGGER IF EXISTS mem_fts_delete;
+      DROP TRIGGER IF EXISTS mem_fts_update;
+
+      CREATE TRIGGER mem_fts_insert AFTER INSERT ON memories BEGIN
         INSERT INTO mem_fts(rowid, summary, text, tags)
         VALUES (new.rowid, new.summary, new.text,
                 CASE WHEN json_array_length(new.tags) > 0
@@ -108,12 +143,22 @@ export class MemoryDatabase {
                 END);
       END;
 
-      CREATE TRIGGER IF NOT EXISTS mem_fts_delete AFTER DELETE ON memories BEGIN
-        DELETE FROM mem_fts WHERE rowid = old.rowid;
+      CREATE TRIGGER mem_fts_delete AFTER DELETE ON memories BEGIN
+        INSERT INTO mem_fts(mem_fts, rowid, summary, text, tags)
+        VALUES ('delete', old.rowid, old.summary, old.text,
+                CASE WHEN json_array_length(old.tags) > 0
+                     THEN (SELECT group_concat(value, ' ') FROM json_each(old.tags))
+                     ELSE ''
+                END);
       END;
 
-      CREATE TRIGGER IF NOT EXISTS mem_fts_update AFTER UPDATE ON memories BEGIN
-        DELETE FROM mem_fts WHERE rowid = old.rowid;
+      CREATE TRIGGER mem_fts_update AFTER UPDATE ON memories BEGIN
+        INSERT INTO mem_fts(mem_fts, rowid, summary, text, tags)
+        VALUES ('delete', old.rowid, old.summary, old.text,
+                CASE WHEN json_array_length(old.tags) > 0
+                     THEN (SELECT group_concat(value, ' ') FROM json_each(old.tags))
+                     ELSE ''
+                END);
         INSERT INTO mem_fts(rowid, summary, text, tags)
         VALUES (new.rowid, new.summary, new.text,
                 CASE WHEN json_array_length(new.tags) > 0
@@ -122,6 +167,8 @@ export class MemoryDatabase {
                 END);
       END;
     `);
+
+    this.db.exec(`INSERT INTO mem_fts(mem_fts) VALUES ('rebuild');`);
   }
 
   // No background timers — CLI is one-shot. Cleanup runs on save.
@@ -534,7 +581,10 @@ export class MemoryDatabase {
       queryParams.push(params.path_prefix);
     }
 
-    query += ' ORDER BY created_at DESC LIMIT ?';
+    query += ` ORDER BY
+      (CASE WHEN tags LIKE '%"__pinned"%' THEN 0 ELSE 1 END),
+      created_at DESC
+      LIMIT ?`;
     queryParams.push(k);
 
     const stmt = this.db.prepare(query);
@@ -609,18 +659,6 @@ export class MemoryDatabase {
       // Delete from main table
       const stmt = this.db.prepare('DELETE FROM memories WHERE id = ? AND project_id = ?');
       const result = stmt.run(id, this.projectId);
-
-      // Try to delete from FTS index if it exists
-      try {
-        const ftsExists = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='memories_fts'").get();
-        if (ftsExists) {
-          const ftsStmt = this.db.prepare('DELETE FROM memories_fts WHERE rowid = (SELECT rowid FROM memories WHERE id = ?)');
-          ftsStmt.run(id);
-        }
-      } catch (ftsError) {
-        // FTS table might not exist, that's okay
-        // FTS deletion skipped
-      }
 
       // deleted
       return {

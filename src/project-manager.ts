@@ -33,7 +33,7 @@ export class ProjectManager {
    * Creates a project ID based on the directory path
    */
   async detectProject(workingDir?: string): Promise<Project> {
-    const dir = workingDir || process.cwd();
+    const dir = this.normalizeProjectPath(workingDir || process.cwd());
 
     // Look for project markers — use sync fs.existsSync (faster than async for local files)
     const markers = ['.git', 'package.json', 'Cargo.toml', 'go.mod', 'pyproject.toml', '.kratos'];
@@ -54,6 +54,7 @@ export class ProjectManager {
       currentDir = path.dirname(currentDir);
     }
 
+    projectRoot = this.normalizeProjectPath(projectRoot);
     const projectId = this.generateProjectId(projectRoot);
     const projectName = path.basename(projectRoot);
 
@@ -102,6 +103,15 @@ export class ProjectManager {
     // Check if it's a project ID — look in cache
     const cache = this.getProjectsCache();
     let project = cache.get(projectIdOrPath);
+
+    if (!project) {
+      const normalizedTarget = projectIdOrPath.trim().toLowerCase();
+
+      // Allow switching by human-readable project name from `kratos status`
+      project = Array.from(cache.values()).find(candidate =>
+        candidate.name.toLowerCase() === normalizedTarget
+      );
+    }
 
     if (!project) {
       // Maybe it's a path
@@ -184,9 +194,17 @@ export class ProjectManager {
    */
   private generateProjectId(projectPath: string): string {
     // Use hash of normalized path for stable ID
-    const normalized = path.resolve(projectPath).toLowerCase();
+    const normalized = this.normalizeProjectPath(projectPath).toLowerCase();
     const hash = crypto.createHash('sha256').update(normalized).digest('hex');
     return `proj_${hash.substring(0, 12)}`;
+  }
+
+  private normalizeProjectPath(projectPath: string): string {
+    try {
+      return fs.realpathSync.native(projectPath);
+    } catch {
+      return path.resolve(projectPath);
+    }
   }
 
   /**
