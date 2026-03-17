@@ -1,6 +1,13 @@
 import type { CLIContext } from '../core.js';
 import { Output } from '../output.js';
 import chalk from 'chalk';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const pkg = JSON.parse(readFileSync(join(__dirname, '..', '..', '..', 'package.json'), 'utf-8'));
 
 export async function statusCommand(ctx: CLIContext): Promise<void> {
   // Mini banner
@@ -97,6 +104,6 @@ export async function statusCommand(ctx: CLIContext): Promise<void> {
 
   // Footer
   console.log('');
-  console.log(chalk.dim(`  v1.0.0  |  Node ${process.version}  |  ${process.platform}`));
+  console.log(chalk.dim(`  v${pkg.version}  |  Node ${process.version}  |  ${process.platform}`));
   console.log('');
 }
