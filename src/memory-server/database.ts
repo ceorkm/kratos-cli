@@ -21,6 +21,14 @@ export interface SearchResult {
   memory: Memory;
   score: number;
   snippet?: string;
+  explain?: {
+    matched_terms: string[];
+    matched_fields: string[];
+    exact_tag_match: boolean;
+    exact_summary_match: boolean;
+    phrase_match: boolean;
+    concept_coverage: number;
+  };
 }
 
 export interface EnhancedSearchResult {
@@ -270,7 +278,7 @@ export class MemoryDatabase {
     if (params.q.match(/[^\w\s]/)) {
       try {
         const fallbackQuery = params.q.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
-        const results = this.executeSearch({...params, q: fallbackQuery});
+        const results = this.executeSearch({...params, q: fallbackQuery, rankingQuery: params.q});
         if (results.length > 0) {
           return results;
         }
@@ -286,7 +294,7 @@ export class MemoryDatabase {
       try {
         // Use first 5 chars as prefix — specific enough to avoid junk matches
         const prefixQuery = longWords.map(w => w.substring(0, 5) + '*').join(' OR ');
-        const results = this.executeSearch({...params, q: prefixQuery});
+        const results = this.executeSearch({...params, q: prefixQuery, rankingQuery: params.q});
         if (results.length > 0) {
           return results;
         }
@@ -300,7 +308,7 @@ export class MemoryDatabase {
     if (meaningfulWords.length > 0) {
       try {
         const orQuery = meaningfulWords.join(' OR ');
-        const results = this.executeSearch({...params, q: orQuery});
+        const results = this.executeSearch({...params, q: orQuery, rankingQuery: params.q});
         if (results.length > 0) {
           return results;
         }
@@ -313,7 +321,7 @@ export class MemoryDatabase {
     if (words.length > 0) {
       const longest = words.sort((a, b) => b.length - a.length)[0];
       try {
-        const results = this.executeSearch({...params, q: longest});
+        const results = this.executeSearch({...params, q: longest, rankingQuery: params.q});
         return results;
       } catch {
         // all failed
@@ -358,7 +366,7 @@ export class MemoryDatabase {
       const fallbackQuery = params.q.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
       queries_tried.push(fallbackQuery);
       try {
-        const results = this.executeSearch({...params, q: fallbackQuery});
+        const results = this.executeSearch({...params, q: fallbackQuery, rankingQuery: params.q});
         if (results.length > 0) {
           return {
             results,
@@ -383,7 +391,7 @@ export class MemoryDatabase {
       const prefixQuery = longWords.map(w => w.substring(0, 5) + '*').join(' OR ');
       queries_tried.push(prefixQuery);
       try {
-        const results = this.executeSearch({...params, q: prefixQuery});
+        const results = this.executeSearch({...params, q: prefixQuery, rankingQuery: params.q});
         if (results.length > 0) {
           return {
             results,
@@ -407,7 +415,7 @@ export class MemoryDatabase {
       const orQuery = meaningfulWords.join(' OR ');
       queries_tried.push(orQuery);
       try {
-        const results = this.executeSearch({...params, q: orQuery});
+        const results = this.executeSearch({...params, q: orQuery, rankingQuery: params.q});
         if (results.length > 0) {
           return {
             results,
@@ -430,7 +438,7 @@ export class MemoryDatabase {
       const longest = [...words].sort((a, b) => b.length - a.length)[0];
       queries_tried.push(longest);
       try {
-        const results = this.executeSearch({...params, q: longest});
+        const results = this.executeSearch({...params, q: longest, rankingQuery: params.q});
         return {
           results,
           debug_info: {
@@ -470,6 +478,7 @@ export class MemoryDatabase {
     require_path_match?: boolean;
     tags?: string[];
     include_expired?: boolean;
+    rankingQuery?: string;
   }): SearchResult[] {
     const k = params.k || 10;
     const now = Date.now();
@@ -525,33 +534,103 @@ export class MemoryDatabase {
     const stmt = this.db.prepare(query);
     const results = stmt.all(...queryParams) as any[];
 
-    // Compute meaningful relevance scores based on term overlap
-    const queryTerms = params.q.toLowerCase().replace(/[^\w\s]/g, '').split(/\s+/).filter(t => t.length > 1);
+    // Compute meaningful relevance scores based on term overlap and match quality.
+    const queryTerms = this.normalizeSearchTerms(params.rankingQuery || params.q);
+    const normalizedPhrase = queryTerms.join(' ');
 
-    return results.map(row => {
+    const scoredResults = results.map(row => {
       const memory = this.rowToMemory(row);
-      const content = `${memory.summary} ${memory.text} ${memory.tags.join(' ')}`.toLowerCase();
+      const summary = memory.summary.toLowerCase();
+      const text = memory.text.toLowerCase();
+      const tags = memory.tags.map(tag => tag.toLowerCase());
+      const paths = memory.paths.map(p => p.toLowerCase());
+      const content = `${summary} ${text} ${tags.join(' ')} ${paths.join(' ')}`;
 
-      // Score: what % of query terms appear in this memory?
-      let matched = 0;
+      const matchedTerms = new Set<string>();
+      const matchedFields = new Set<string>();
+      let exactTagMatch = false;
+      let exactSummaryMatch = false;
+
       for (const term of queryTerms) {
-        if (content.includes(term)) matched++;
-        // Bonus for exact word in tags
-        else if (memory.tags.some(t => t.toLowerCase().includes(term))) matched += 0.5;
+        let matched = false;
+
+        if (tags.some(tag => tag === term || tag.includes(term))) {
+          matched = true;
+          matchedTerms.add(term);
+          matchedFields.add('tags');
+          if (tags.some(tag => tag === term)) exactTagMatch = true;
+        }
+        if (summary.includes(term)) {
+          matched = true;
+          matchedTerms.add(term);
+          matchedFields.add('summary');
+          if (summary.split(/\W+/).includes(term)) exactSummaryMatch = true;
+        }
+        if (paths.some(p => p.includes(term))) {
+          matched = true;
+          matchedTerms.add(term);
+          matchedFields.add('paths');
+        }
+        if (text.includes(term)) {
+          matched = true;
+          matchedTerms.add(term);
+          matchedFields.add('text');
+        }
+
+        if (!matched && content.includes(term)) {
+          matchedTerms.add(term);
+        }
       }
-      const termScore = queryTerms.length > 0 ? matched / queryTerms.length : 0;
 
-      // Boost for importance
-      const importanceBoost = (memory.importance - 1) / 4 * 0.2; // 0-20% boost
+      const conceptCoverage = queryTerms.length > 0 ? matchedTerms.size / queryTerms.length : 0;
+      const phraseMatch = normalizedPhrase.length > 0 && (
+        summary.includes(normalizedPhrase) ||
+        text.includes(normalizedPhrase) ||
+        tags.join(' ').includes(normalizedPhrase)
+      );
 
-      const score = Math.min(1, termScore + importanceBoost);
+      let fieldBoost = 0;
+      if (matchedFields.has('tags')) fieldBoost += 0.22;
+      if (matchedFields.has('summary')) fieldBoost += 0.16;
+      if (matchedFields.has('paths')) fieldBoost += 0.1;
+      if (phraseMatch) fieldBoost += 0.12;
+      if (exactTagMatch) fieldBoost += 0.08;
+      if (exactSummaryMatch) fieldBoost += 0.06;
+
+      const importanceBoost = (memory.importance - 1) / 4 * 0.12;
+      const coverageBoost = conceptCoverage * 0.32;
+      const baseFtsSignal = Math.min(0.28, Math.max(0, (-1 * Number(row.fts_score || 0)) * 0.04));
+
+      const score = Math.min(1, coverageBoost + fieldBoost + importanceBoost + baseFtsSignal);
 
       return {
         memory,
         score: Math.round(score * 100), // 0-100%
-        snippet: row.snippet
+        snippet: row.snippet,
+        explain: {
+          matched_terms: Array.from(matchedTerms),
+          matched_fields: Array.from(matchedFields),
+          exact_tag_match: exactTagMatch,
+          exact_summary_match: exactSummaryMatch,
+          phrase_match: phraseMatch,
+          concept_coverage: Number(conceptCoverage.toFixed(2)),
+        }
       };
     });
+
+    return scoredResults.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      if (b.memory.importance !== a.memory.importance) return b.memory.importance - a.memory.importance;
+      return b.memory.created_at - a.memory.created_at;
+    });
+  }
+
+  private normalizeSearchTerms(query: string): string[] {
+    return query
+      .toLowerCase()
+      .replace(/[^\w\s]/g, ' ')
+      .split(/\s+/)
+      .filter(t => t.length > 1);
   }
 
   getRecent(params: {

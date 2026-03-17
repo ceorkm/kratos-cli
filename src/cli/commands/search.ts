@@ -74,6 +74,12 @@ function serializeResults(results: SearchResult[]) {
     ttl: r.memory.ttl,
     score: r.score,
     snippet: r.snippet,
+    matched_terms: r.explain?.matched_terms || [],
+    matched_fields: r.explain?.matched_fields || [],
+    exact_tag_match: r.explain?.exact_tag_match || false,
+    exact_summary_match: r.explain?.exact_summary_match || false,
+    phrase_match: r.explain?.phrase_match || false,
+    concept_coverage: r.explain?.concept_coverage ?? 0,
   }));
 }
 

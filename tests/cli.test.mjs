@@ -165,3 +165,119 @@ test('write commands emit parser-safe JSON', () => {
   }).stdout);
   assert.equal(forgotten.ok, true);
 });
+
+test('ask handles paraphrases and avoids cross-domain false positives', () => {
+  const sandbox = makeSandbox();
+  const project = makeProject(sandbox.workspace, 'ask-paraphrase-project');
+
+  const sshMemory = parseJson(runCli([
+    'save',
+    'SSH into the VPS with: ssh root@203.0.113.10 -p 22. Use the deploy key and restart docker after login.',
+    '--tags',
+    'ssh,vps,deploy',
+    '--json',
+  ], { cwd: project, home: sandbox.home }).stdout);
+
+  const authMemory = parseJson(runCli([
+    'save',
+    'Production auth uses JWT access tokens plus rotating refresh tokens in httpOnly cookies.',
+    '--tags',
+    'auth,jwt',
+    '--json',
+  ], { cwd: project, home: sandbox.home }).stdout);
+
+  parseJson(runCli([
+    'save',
+    'Billing webhooks are signed with Stripe signatures and retried for up to 72 hours.',
+    '--tags',
+    'billing,webhooks,stripe',
+    '--json',
+  ], { cwd: project, home: sandbox.home }).stdout);
+
+  parseJson(runCli([
+    'save',
+    'Use Tailscale SSH for internal boxes when direct public SSH is disabled.',
+    '--tags',
+    'ssh,tailscale,infra',
+    '--json',
+  ], { cwd: project, home: sandbox.home }).stdout);
+
+  const enterBox = parseJson(runCli(['ask', 'How do I enter the box?', '--json'], {
+    cwd: project,
+    home: sandbox.home,
+  }).stdout);
+  assert.equal(enterBox.count > 0, true);
+  assert.match(enterBox.answer, /ssh/i);
+
+  const privateMachines = parseJson(runCli(['ask', 'How do I use SSH for private machines?', '--json'], {
+    cwd: project,
+    home: sandbox.home,
+  }).stdout);
+  assert.equal(privateMachines.count > 0, true);
+  assert.match(privateMachines.answer, /tailscale ssh/i);
+
+  const signInUsers = parseJson(runCli(['ask', 'How do I sign in users?', '--json'], {
+    cwd: project,
+    home: sandbox.home,
+  }).stdout);
+  assert.equal(signInUsers.count > 0, true);
+  assert.equal(signInUsers.results[0].id, authMemory.id);
+
+  const wrongDomain = parseJson(runCli(['ask', 'What machine do I ssh to for billing?', '--json'], {
+    cwd: project,
+    home: sandbox.home,
+  }).stdout);
+  assert.equal(wrongDomain.count, 0);
+});
+
+test('search boosts strong fields, rewards concept coverage, and exposes explain fields', () => {
+  const sandbox = makeSandbox();
+  const project = makeProject(sandbox.workspace, 'search-ranking-project');
+
+  const tagged = parseJson(runCli([
+    'save',
+    'Authentication architecture and rollout notes',
+    '--tags',
+    'auth,jwt',
+    '--json',
+  ], { cwd: project, home: sandbox.home }).stdout);
+
+  parseJson(runCli([
+    'save',
+    'This note mentions auth once in the body but is mostly about general cleanup.',
+    '--json',
+  ], { cwd: project, home: sandbox.home }).stdout);
+
+  const fullCoverage = parseJson(runCli([
+    'save',
+    'Deploy to the VPS over SSH using the standard deploy workflow.',
+    '--tags',
+    'deploy,ssh,vps',
+    '--json',
+  ], { cwd: project, home: sandbox.home }).stdout);
+
+  parseJson(runCli([
+    'save',
+    'Deploy workflow notes for the release train.',
+    '--tags',
+    'deploy',
+    '--json',
+  ], { cwd: project, home: sandbox.home }).stdout);
+
+  const authSearch = parseJson(runCli(['search', 'auth', '--json'], {
+    cwd: project,
+    home: sandbox.home,
+  }).stdout);
+  assert.equal(authSearch.results[0].id, tagged.id);
+  assert.equal(authSearch.results[0].exact_tag_match, true);
+  assert.equal(Array.isArray(authSearch.results[0].matched_terms), true);
+  assert.equal(Array.isArray(authSearch.results[0].matched_fields), true);
+
+  const coverageSearch = parseJson(runCli(['search', 'ssh vps deploy', '--json'], {
+    cwd: project,
+    home: sandbox.home,
+  }).stdout);
+  assert.equal(coverageSearch.results[0].id, fullCoverage.id);
+  assert.equal(coverageSearch.results[0].concept_coverage >= 0.66, true);
+  assert.equal(coverageSearch.results[0].matched_fields.includes('tags') || coverageSearch.results[0].matched_fields.includes('summary'), true);
+});
