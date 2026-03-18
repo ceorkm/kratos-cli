@@ -74,6 +74,26 @@ test('switch accepts a project name listed in status', () => {
   assert.equal(json.project.root, alpha);
 });
 
+test('switching to an explicit nested path keeps that exact directory as the project root', () => {
+  const sandbox = makeSandbox();
+  const parent = makeProject(sandbox.workspace, 'parent-project');
+  const child = path.join(parent, 'nested', 'securityclaw');
+  fs.mkdirSync(child, { recursive: true });
+
+  runCli(['save', 'parent memory'], { cwd: parent, home: sandbox.home });
+
+  const result = runCli(['switch', child, '--json'], {
+    cwd: parent,
+    home: sandbox.home,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const json = parseJson(result.stdout);
+  assert.equal(json.ok, true);
+  assert.equal(json.project.root, fs.realpathSync.native(child));
+  assert.equal(json.project.name, 'securityclaw');
+});
+
 test('scan suppresses overlapping phone false positive inside API key', () => {
   const sandbox = makeSandbox();
   const project = makeProject(sandbox.workspace, 'scan-project');

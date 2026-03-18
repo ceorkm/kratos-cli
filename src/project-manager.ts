@@ -32,26 +32,30 @@ export class ProjectManager {
    * Auto-detect project from current working directory
    * Creates a project ID based on the directory path
    */
-  async detectProject(workingDir?: string): Promise<Project> {
-    const dir = this.normalizeProjectPath(workingDir || process.cwd());
-
-    // Look for project markers — use sync fs.existsSync (faster than async for local files)
-    const markers = ['.git', 'package.json', 'Cargo.toml', 'go.mod', 'pyproject.toml', '.kratos'];
-
+  async detectProject(workingDir?: string, options: {
+    exactPath?: boolean;
+  } = {}): Promise<Project> {
+    const requestedPath = workingDir || process.cwd();
+    const dir = this.resolveRequestedPath(requestedPath);
     let projectRoot = dir;
-    let found = false;
 
-    let currentDir = dir;
-    while (currentDir !== path.dirname(currentDir)) {
-      for (const marker of markers) {
-        if (fs.existsSync(path.join(currentDir, marker))) {
-          projectRoot = currentDir;
-          found = true;
-          break;
+    if (!options.exactPath) {
+      // Look for project markers — use sync fs.existsSync (faster than async for local files)
+      const markers = ['.git', 'package.json', 'Cargo.toml', 'go.mod', 'pyproject.toml', '.kratos'];
+
+      let found = false;
+      let currentDir = dir;
+      while (currentDir !== path.dirname(currentDir)) {
+        for (const marker of markers) {
+          if (fs.existsSync(path.join(currentDir, marker))) {
+            projectRoot = currentDir;
+            found = true;
+            break;
+          }
         }
+        if (found) break;
+        currentDir = path.dirname(currentDir);
       }
-      if (found) break;
-      currentDir = path.dirname(currentDir);
     }
 
     projectRoot = this.normalizeProjectPath(projectRoot);
@@ -116,7 +120,7 @@ export class ProjectManager {
     if (!project) {
       // Maybe it's a path
       if (fs.existsSync(projectIdOrPath)) {
-        project = await this.detectProject(projectIdOrPath);
+        project = await this.detectProject(projectIdOrPath, { exactPath: true });
       } else {
         throw new Error(`Project not found: ${projectIdOrPath}`);
       }
@@ -204,6 +208,16 @@ export class ProjectManager {
       return fs.realpathSync.native(projectPath);
     } catch {
       return path.resolve(projectPath);
+    }
+  }
+
+  private resolveRequestedPath(projectPath: string): string {
+    const normalized = this.normalizeProjectPath(projectPath);
+    try {
+      const stat = fs.statSync(normalized);
+      return stat.isDirectory() ? normalized : path.dirname(normalized);
+    } catch {
+      return normalized;
     }
   }
 
