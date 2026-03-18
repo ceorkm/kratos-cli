@@ -40,21 +40,11 @@ export class ProjectManager {
     let projectRoot = dir;
 
     if (!options.exactPath) {
-      // Look for project markers — use sync fs.existsSync (faster than async for local files)
-      const markers = ['.git', 'package.json', 'Cargo.toml', 'go.mod', 'pyproject.toml', '.kratos'];
-
-      let found = false;
-      let currentDir = dir;
-      while (currentDir !== path.dirname(currentDir)) {
-        for (const marker of markers) {
-          if (fs.existsSync(path.join(currentDir, marker))) {
-            projectRoot = currentDir;
-            found = true;
-            break;
-          }
-        }
-        if (found) break;
-        currentDir = path.dirname(currentDir);
+      const strongRoot = this.findNearestStrongProjectRoot(dir);
+      if (strongRoot) {
+        projectRoot = strongRoot;
+      } else if (this.hasLocalProjectMarker(dir)) {
+        projectRoot = dir;
       }
     }
 
@@ -219,6 +209,32 @@ export class ProjectManager {
     } catch {
       return normalized;
     }
+  }
+
+  private findNearestStrongProjectRoot(dir: string): string | null {
+    let currentDir = dir;
+    while (currentDir !== path.dirname(currentDir)) {
+      if (this.hasStrongProjectMarker(currentDir)) {
+        return currentDir;
+      }
+      currentDir = path.dirname(currentDir);
+    }
+
+    if (this.hasStrongProjectMarker(currentDir)) {
+      return currentDir;
+    }
+
+    return null;
+  }
+
+  private hasStrongProjectMarker(dir: string): boolean {
+    return ['.git', '.kratos'].some(marker => fs.existsSync(path.join(dir, marker)));
+  }
+
+  private hasLocalProjectMarker(dir: string): boolean {
+    return ['package.json', 'Cargo.toml', 'go.mod', 'pyproject.toml'].some(marker =>
+      fs.existsSync(path.join(dir, marker))
+    );
   }
 
   /**

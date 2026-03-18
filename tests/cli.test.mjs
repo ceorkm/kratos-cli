@@ -94,6 +94,42 @@ test('switching to an explicit nested path keeps that exact directory as the pro
   assert.equal(json.project.name, 'securityclaw');
 });
 
+test('auto-detect does not let a weak parent marker hijack a child directory', () => {
+  const sandbox = makeSandbox();
+  const parent = makeProject(sandbox.workspace, 'femi-home');
+  const child = path.join(parent, 'Securityclaw');
+  fs.mkdirSync(child, { recursive: true });
+
+  const result = runCli(['status', '--json'], {
+    cwd: child,
+    home: sandbox.home,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const json = parseJson(result.stdout);
+  assert.equal(json.project.root, fs.realpathSync.native(child));
+  assert.equal(json.project.name, 'Securityclaw');
+});
+
+test('auto-detect still honors a strong git project root for nested directories', () => {
+  const sandbox = makeSandbox();
+  const repoRoot = path.join(sandbox.workspace, 'repo-root');
+  const nested = path.join(repoRoot, 'packages', 'web');
+  fs.mkdirSync(path.join(repoRoot, '.git'), { recursive: true });
+  fs.mkdirSync(nested, { recursive: true });
+  fs.writeFileSync(path.join(repoRoot, 'package.json'), JSON.stringify({ name: 'repo-root', private: true }, null, 2));
+
+  const result = runCli(['status', '--json'], {
+    cwd: nested,
+    home: sandbox.home,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const json = parseJson(result.stdout);
+  assert.equal(json.project.root, fs.realpathSync.native(repoRoot));
+  assert.equal(json.project.name, 'repo-root');
+});
+
 test('scan suppresses overlapping phone false positive inside API key', () => {
   const sandbox = makeSandbox();
   const project = makeProject(sandbox.workspace, 'scan-project');
