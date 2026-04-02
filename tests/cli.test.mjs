@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-const CLI_PATH = path.resolve('/Users/femi/sso/kratos-cli/dist/cli/index.js');
+const CLI_PATH = path.resolve(new URL('../dist/cli/index.js', import.meta.url).pathname);
 
 function makeSandbox() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kratos-cli-test-'));
@@ -111,23 +111,31 @@ test('auto-detect does not let a weak parent marker hijack a child directory', (
   assert.equal(json.project.name, 'Securityclaw');
 });
 
-test('auto-detect still honors a strong git project root for nested directories', () => {
+test('registry-based detection: first run registers cwd, second run from subdirectory reuses it', () => {
   const sandbox = makeSandbox();
-  const repoRoot = path.join(sandbox.workspace, 'repo-root');
-  const nested = path.join(repoRoot, 'packages', 'web');
-  fs.mkdirSync(path.join(repoRoot, '.git'), { recursive: true });
+  const projectDir = path.join(sandbox.workspace, 'my-app');
+  const nested = path.join(projectDir, 'src', 'components');
   fs.mkdirSync(nested, { recursive: true });
-  fs.writeFileSync(path.join(repoRoot, 'package.json'), JSON.stringify({ name: 'repo-root', private: true }, null, 2));
 
-  const result = runCli(['status', '--json'], {
+  // First run from project root — registers it
+  const first = runCli(['status', '--json'], {
+    cwd: projectDir,
+    home: sandbox.home,
+  });
+  assert.equal(first.status, 0, first.stderr);
+  const firstJson = parseJson(first.stdout);
+  assert.equal(firstJson.project.root, fs.realpathSync.native(projectDir));
+  assert.equal(firstJson.project.name, 'my-app');
+
+  // Second run from nested subdirectory — reuses registered project
+  const second = runCli(['status', '--json'], {
     cwd: nested,
     home: sandbox.home,
   });
-
-  assert.equal(result.status, 0, result.stderr);
-  const json = parseJson(result.stdout);
-  assert.equal(json.project.root, fs.realpathSync.native(repoRoot));
-  assert.equal(json.project.name, 'repo-root');
+  assert.equal(second.status, 0, second.stderr);
+  const secondJson = parseJson(second.stdout);
+  assert.equal(secondJson.project.root, fs.realpathSync.native(projectDir));
+  assert.equal(secondJson.project.name, 'my-app');
 });
 
 test('scan suppresses overlapping phone false positive inside API key', () => {

@@ -14,6 +14,8 @@ export async function saveCommand(ctx: CLIContext, text: string, opts: {
 
   let summary = text.substring(0, 200);
   let fullText = text;
+  const piiDetector = await ctx.getPIIDetector();
+  const scanResult = piiDetector.detect(text);
 
   // If compress flag is set, use rule-based compression (pure logic, no AI)
   if (opts.compress) {
@@ -49,8 +51,20 @@ export async function saveCommand(ctx: CLIContext, text: string, opts: {
       paths,
       importance,
       compressed: !!opts.compress,
+      warning: scanResult.hasPII || scanResult.hasSecrets ? {
+        has_pii: scanResult.hasPII,
+        has_secrets: scanResult.hasSecrets,
+        findings: scanResult.findings,
+      } : null,
     });
     return;
+  }
+
+  if (scanResult.hasPII || scanResult.hasSecrets) {
+    Output.warn('PII or secrets detected in memory text. Saving anyway.');
+    for (const finding of scanResult.findings) {
+      Output.dim(`  - ${finding.pattern} (${finding.type}, confidence: ${finding.confidence}) -> ${finding.redacted}`);
+    }
   }
 
   Output.success(`Memory saved: ${id}`);

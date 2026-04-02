@@ -1,7 +1,7 @@
 {
   "name": "kratos-memory",
-  "version": "1.4.1",
-  "description": "Persistent memory for AI coding agents — CLI-first, encrypted, local",
+  "version": "1.5.0",
+  "description": "Persistent memory for AI coding agents — CLI-first, local, zero network calls",
   "main": "dist/cli/index.js",
   "type": "module",
   "bin": {
@@ -17,6 +17,7 @@
     "dev": "tsx src/cli/index.ts",
     "start": "node dist/cli/index.js",
     "test": "npm run build && node --test tests/*.test.mjs",
+    "postinstall": "npm rebuild better-sqlite3 || exit 0",
     "prepublishOnly": "npm run build"
   },
   "keywords": [

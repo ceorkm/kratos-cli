@@ -8,7 +8,8 @@ export async function switchCommand(ctx: CLIContext, projectPath: string, opts: 
   try {
     const newProject = await ctx.projectManager.switchProject(projectPath);
 
-    // Re-initialize memory database for the new project
+    // Close old DB handle before switching
+    ctx.memoryDb.close();
     ctx.memoryDb = new MemoryDatabase(newProject.root, newProject.id);
     ctx.project = newProject;
 

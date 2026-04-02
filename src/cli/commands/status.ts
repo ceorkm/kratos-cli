@@ -55,7 +55,6 @@ export async function statusCommand(ctx: CLIContext, opts: {
         .map(([tag, count]) => ({ tag, count })),
       features: [
         'FTS5 Full-Text Search',
-        'AES-256-GCM Encryption',
         'PII/Secret Detection',
         'Smart Compression',
         'Auto-Capture Hooks',
@@ -141,7 +140,6 @@ export async function statusCommand(ctx: CLIContext, opts: {
   console.log('');
   console.log(chalk.bold.white('  FEATURES'));
   console.log(`    ${chalk.green('●')} FTS5 Full-Text Search`);
-  console.log(`    ${chalk.green('●')} AES-256-GCM Encryption`);
   console.log(`    ${chalk.green('●')} PII/Secret Detection`);
   console.log(`    ${chalk.green('●')} Smart Compression`);
   console.log(`    ${chalk.green('●')} Auto-Capture Hooks`);

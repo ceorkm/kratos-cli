@@ -53,13 +53,22 @@ export class CaptureHandler {
     }
 
     // Compress with rule-based compressor
-    const compressed = await this.compressor.compress(summary);
+    const piiDetector = await this.ctx.getPIIDetector();
+    const summaryScan = piiDetector.detect(summary);
+    const safeSummary = summaryScan.hasPII || summaryScan.hasSecrets
+      ? summaryScan.redactedText
+      : summary;
+    const compressed = await this.compressor.compress(safeSummary);
 
     // Truncate raw data to prevent DB bloat
     const rawText = JSON.stringify(data, null, 2);
-    const text = rawText.length > MAX_STDIN_SIZE
+    const truncatedText = rawText.length > MAX_STDIN_SIZE
       ? rawText.substring(0, MAX_STDIN_SIZE) + '\n... (truncated)'
       : rawText;
+    const payloadScan = piiDetector.detect(truncatedText);
+    const text = payloadScan.hasPII || payloadScan.hasSecrets
+      ? payloadScan.redactedText
+      : truncatedText;
 
     this.ctx.memoryDb.save({
       summary: compressed.summary,
@@ -72,7 +81,7 @@ export class CaptureHandler {
     await this.appendToBuffer({
       timestamp: Date.now(),
       type: toolName,
-      summary,
+      summary: safeSummary,
       paths: filePaths,
       tags,
     });

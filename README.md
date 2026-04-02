@@ -26,7 +26,7 @@
 
 AI coding tools forget everything between sessions. You explain your architecture, your patterns, your decisions — and next session, you explain it all again.
 
-Kratos gives your AI agent permanent memory. Every observation is saved, searchable, and encrypted locally. No cloud, no API keys, no vendor lock-in.
+Kratos gives your AI agent permanent memory. Every observation is saved and searchable locally. No cloud, no API keys, no vendor lock-in.
 
 ```
 > use npx kratos-memory CLI. save what you learn, search when you need context.
@@ -92,7 +92,7 @@ Same pattern. If it can run Bash, it can use Kratos.
 | Feature | Detail |
 |---------|--------|
 | **FTS5 Search** | Full-text search with porter tokenizer, smart fallbacks, <10ms retrieval |
-| **AES-256-GCM Encryption** | Per-project encryption keys, all data encrypted at rest |
+| **Local-only Storage** | All data stays on your machine, zero network calls |
 | **PII Detection** | Auto-detects SSN, credit cards, emails, phones, API keys, AWS keys, JWTs |
 | **Project Isolation** | Each project gets its own SQLite database — zero cross-contamination |
 | **Smart Compression** | Rule-based compression, no AI dependency |
@@ -112,7 +112,7 @@ Agent works with full context
         ↓
 Agent runs: npx kratos-memory save "what it learned"
         ↓
-Encrypted, stored locally, searchable forever
+Stored locally, searchable forever
 ```
 
 ## Data storage
@@ -126,19 +126,16 @@ Encrypted, stored locally, searchable forever
 │   │   └── project.json           # Project metadata
 │   └── proj_def456/
 │       └── ...
-├── .keys/
-│   └── proj_abc123.key            # AES-256 encryption key
 └── projects.json                  # Project registry
 ```
 
-Each project is completely isolated. Different database, different encryption key.
+Each project is completely isolated with its own database.
 
 ## Security
 
-- **AES-256-GCM** encryption at rest with per-project keys
 - **PII detection** — SSN, credit cards, emails, phones, IPs, DOB
 - **Secret scanning** — API keys, AWS keys, GitHub tokens, JWTs, private keys
-- **Key rotation** support
+- **Auto-redaction** — captured hook payloads are scanned and redacted before storage
 - **Zero network calls** — nothing ever leaves your machine
 - **No telemetry, no analytics, no cloud**
 

@@ -22,7 +22,7 @@ ${chalk.bold.red('  ██║  ██╗██║  ██║██║  ██║
 ${chalk.bold.red('  ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝    ╚═════╝ ╚══════╝')}
 ${chalk.dim('  ─────────────────────────────────────────────────────')}
 ${chalk.white('  The God of War remembers everything.')}
-${chalk.dim(`  v${VERSION}  |  CLI-first  |  FTS5  |  Encrypted`)}
+${chalk.dim(`  v${VERSION}  |  CLI-first  |  FTS5`)}
 `;
 
 const program = new Command();
@@ -166,6 +166,17 @@ program
     const ctx = await initCLIContext();
     const { statusCommand } = await import('./commands/status.js');
     await statusCommand(ctx, opts);
+  });
+
+// ─── create ─────────────────────────────────────────────
+program
+  .command('create <path>')
+  .description('Create a new project scoped to a directory')
+  .option('-j, --json', 'Output JSON')
+  .action(async (projectPath: string, opts) => {
+    const ctx = await initCLIContext();
+    const { createCommand } = await import('./commands/create.js');
+    await createCommand(ctx, projectPath, opts);
   });
 
 // ─── switch ─────────────────────────────────────────────

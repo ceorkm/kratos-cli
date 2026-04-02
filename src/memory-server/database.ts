@@ -74,6 +74,12 @@ export class MemoryDatabase {
     // No setInterval — CLI commands are one-shot
   }
 
+  close(): void {
+    if (this.db.open) {
+      this.db.close();
+    }
+  }
+
   private initializeSchema() {
     // Main memories table
     this.db.exec(`
@@ -196,7 +202,13 @@ export class MemoryDatabase {
     const id = this.generateId();
 
     // Compute dedupe hash
-    const dedupeHash = this.computeDedupeHash(params.summary, params.paths || []);
+    const dedupeHash = this.computeDedupeHash({
+      summary: params.summary,
+      text: params.text,
+      tags: params.tags || [],
+      paths: params.paths || [],
+      importance: params.importance || 3,
+    });
 
     // Check for duplicates
     const existing = this.db.prepare(
@@ -512,23 +524,21 @@ export class MemoryDatabase {
 
     // Add path matching filter
     if (params.require_path_match) {
-      // Filter by paths that exist relative to current working directory
+      // Absolute paths must be under cwd; relative paths are accepted (stored relative to project root)
       const cwd = process.cwd();
 
-      // Use EXISTS to check if any path in the JSON array exists relative to cwd
       query += ` AND EXISTS (
         SELECT 1 FROM json_each(m.paths) as path_item
         WHERE
-          -- Check if it's an absolute path under cwd
           (path_item.value LIKE ? || '%') OR
-          -- Check if it's a relative path that exists from cwd
-          (path_item.value NOT LIKE '/%' AND path_item.value NOT LIKE 'C:%' AND path_item.value NOT LIKE '~%')
+          (path_item.value NOT LIKE '/%' AND length(path_item.value) > 0)
       )`;
       queryParams.push(cwd + '/');
     }
 
     // Pinned memories (__pinned tag) surface first
-    query += ` ORDER BY (CASE WHEN m.tags LIKE '%__pinned%' THEN 0 ELSE 1 END), fts_score DESC, m.importance DESC, m.created_at DESC LIMIT ?`;
+    // bm25() returns negative values where closer to 0 = better match, so sort ASC
+    query += ` ORDER BY (CASE WHEN m.tags LIKE '%__pinned%' THEN 0 ELSE 1 END), fts_score ASC, m.importance DESC, m.created_at DESC LIMIT ?`;
     queryParams.push(k);
 
     const stmt = this.db.prepare(query);
@@ -794,9 +804,26 @@ export class MemoryDatabase {
   }
 
   private _update(id: string, params: Partial<Memory>): { id: string } {
+    const existing = this.get(id);
+    if (!existing) {
+      return { id };
+    }
+
     const now = Date.now();
     const updates: string[] = ['updated_at = ?'];
     const values: any[] = [now];
+    const nextSummary = params.summary ?? existing.summary;
+    const nextText = params.text ?? existing.text;
+    const nextTags = params.tags ?? existing.tags;
+    const nextPaths = params.paths ?? existing.paths;
+    const nextImportance = params.importance ?? existing.importance;
+    const nextDedupeHash = this.computeDedupeHash({
+      summary: nextSummary,
+      text: nextText,
+      tags: nextTags,
+      paths: nextPaths,
+      importance: nextImportance,
+    });
 
     if (params.summary !== undefined) {
       updates.push('summary = ?');
@@ -818,6 +845,9 @@ export class MemoryDatabase {
       updates.push('importance = ?');
       values.push(params.importance);
     }
+
+    updates.push('dedupe_hash = ?');
+    values.push(nextDedupeHash);
 
     values.push(id, this.projectId);
 
@@ -895,9 +925,9 @@ export class MemoryDatabase {
     }
 
     if (params.tags && params.tags.length > 0) {
-      const tagConditions = params.tags.map(() => 'json_extract(m.tags, ?) IS NOT NULL').join(' AND ');
-      baseQuery += ` AND (${tagConditions})`;
-      params.tags.forEach((tag, i) => queryParams.push(`$[${i}]`));
+      baseQuery += ' AND EXISTS (SELECT 1 FROM json_each(m.tags) WHERE value IN (' +
+        params.tags.map(() => '?').join(',') + '))';
+      queryParams.push(...params.tags);
       filtersApplied.push(`Filtering by tags: ${params.tags.join(', ')}`);
     }
 
@@ -907,7 +937,7 @@ export class MemoryDatabase {
         SELECT 1 FROM json_each(m.paths) as path_item
         WHERE
           (path_item.value LIKE ? || '%') OR
-          (path_item.value NOT LIKE '/%' AND path_item.value NOT LIKE 'C:%' AND path_item.value NOT LIKE '~%')
+          (path_item.value NOT LIKE '/%' AND length(path_item.value) > 0)
       )`;
       queryParams.push(cwd + '/');
       filtersApplied.push(`Requiring path match for current directory`);
@@ -932,38 +962,37 @@ export class MemoryDatabase {
         AND m.project_id = ?
     `;
 
-    // Apply the same filters to both queries
-    const countParams = [...queryParams];
-    const sampleParams = [...queryParams];
+    // Start count/sample params fresh — they have their own MATCH ? and project_id ?
+    const countParams: any[] = [escapedQuery, this.projectId];
+    const sampleParams: any[] = [escapedQuery, this.projectId];
 
     if (!params.include_expired) {
       countQuery += ' AND (m.expires_at IS NULL OR m.expires_at > ?)';
       sampleQuery += ' AND (m.expires_at IS NULL OR m.expires_at > ?)';
+      countParams.push(now);
+      sampleParams.push(now);
     }
 
     if (params.tags && params.tags.length > 0) {
-      const tagConditions = params.tags.map(() => 'json_extract(m.tags, ?) IS NOT NULL').join(' AND ');
-      countQuery += ` AND (${tagConditions})`;
-      sampleQuery += ` AND (${tagConditions})`;
+      const tagFilter = ' AND EXISTS (SELECT 1 FROM json_each(m.tags) WHERE value IN (' +
+        params.tags.map(() => '?').join(',') + '))';
+      countQuery += tagFilter;
+      sampleQuery += tagFilter;
+      countParams.push(...params.tags);
+      sampleParams.push(...params.tags);
     }
 
     if (params.require_path_match) {
       const cwd = process.cwd();
-
-      countQuery += ` AND EXISTS (
+      const pathFilter = ` AND EXISTS (
         SELECT 1 FROM json_each(m.paths) as path_item
         WHERE
           (path_item.value LIKE ? || '%') OR
-          (path_item.value NOT LIKE '/%' AND path_item.value NOT LIKE 'C:%' AND path_item.value NOT LIKE '~%')
+          (path_item.value NOT LIKE '/%' AND length(path_item.value) > 0)
       )`;
+      countQuery += pathFilter;
       countParams.push(cwd + '/');
-
-      sampleQuery += ` AND EXISTS (
-        SELECT 1 FROM json_each(m.paths) as path_item
-        WHERE
-          (path_item.value LIKE ? || '%') OR
-          (path_item.value NOT LIKE '/%' AND path_item.value NOT LIKE 'C:%' AND path_item.value NOT LIKE '~%')
-      )`;
+      sampleQuery += pathFilter;
       sampleParams.push(cwd + '/');
     }
 
@@ -1054,26 +1083,43 @@ export class MemoryDatabase {
     return `mem_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
   }
 
-  private computeDedupeHash(summary: string, paths: string[]): string {
-    const normalized = summary.toLowerCase().trim() + '|' + paths.sort().join('|');
+  private computeDedupeHash(params: {
+    summary: string;
+    text: string;
+    tags: string[];
+    paths: string[];
+    importance: number;
+  }): string {
+    const normalized = JSON.stringify({
+      summary: params.summary.trim().toLowerCase(),
+      text: params.text.trim(),
+      tags: [...params.tags].map(tag => tag.trim().toLowerCase()).sort(),
+      paths: [...params.paths].map(filePath => filePath.trim()).sort(),
+      importance: params.importance,
+    });
     return crypto.createHash('md5').update(normalized).digest('hex');
   }
 
   private escapeQuery(query: string): string {
-    // Escape FTS5 special characters and wrap in double quotes for phrase search
-    // This prevents "grably-desktop" from being interpreted as "grably MINUS desktop"
+    // Escape FTS5 special characters and join terms with OR for broader matching.
+    // Previous approach wrapped everything in quotes (exact phrase) which was too strict.
     const cleaned = query
-      .replace(/["]/g, '""')           // Escape existing quotes
+      .replace(/["]/g, '')              // Remove quotes
       .replace(/[^\w\s]/g, ' ')        // Replace special chars with spaces
       .replace(/\s+/g, ' ')            // Normalize whitespace
       .trim();
 
-    // If query contains spaces or was modified, wrap in quotes for phrase search
-    if (cleaned !== query || cleaned.includes(' ')) {
-      return `"${cleaned}"`;
-    }
+    const terms = cleaned.split(' ').filter(t => t.length > 0);
+    if (terms.length === 0) return '""';
+    if (terms.length === 1) return terms[0];
 
-    return cleaned;
+    // OR-join terms so "ssh vps deploy" matches memories containing any of those words
+    return terms.join(' OR ');
+  }
+
+  private safeJsonArray(value: any): string[] {
+    try { return Array.isArray(value) ? value : JSON.parse(value); }
+    catch { return []; }
   }
 
   private rowToMemory(row: any): Memory {
@@ -1082,8 +1128,8 @@ export class MemoryDatabase {
       project_id: row.project_id,
       summary: row.summary,
       text: row.text,
-      tags: JSON.parse(row.tags),
-      paths: JSON.parse(row.paths),
+      tags: this.safeJsonArray(row.tags),
+      paths: this.safeJsonArray(row.paths),
       importance: row.importance,
       created_at: row.created_at,
       updated_at: row.updated_at,
@@ -1096,9 +1142,5 @@ export class MemoryDatabase {
     // Always use the projectId passed to constructor - ensures true isolation
     // No environment variable dependency - each database instance is bound to its project
     return this.projectId;
-  }
-
-  close() {
-    this.db.close();
   }
 }
