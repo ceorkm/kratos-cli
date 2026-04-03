@@ -23,6 +23,7 @@ ${chalk.bold.red('  ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝
 ${chalk.dim('  ─────────────────────────────────────────────────────')}
 ${chalk.white('  The God of War remembers everything.')}
 ${chalk.dim(`  v${VERSION}  |  CLI-first  |  FTS5`)}
+${chalk.dim('  Add --global to any command for cross-project memory')}
 `;
 
 const program = new Command();
