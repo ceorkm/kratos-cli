@@ -1,4 +1,4 @@
-import type { CLIContext } from '../core.js';
+import { getScopedMemoryDb, type CLIContext } from '../core.js';
 import { Output } from '../output.js';
 
 export async function updateCommand(ctx: CLIContext, id: string, text: string, opts: {
@@ -6,7 +6,10 @@ export async function updateCommand(ctx: CLIContext, id: string, text: string, o
   importance?: string;
   paths?: string;
   json?: boolean;
+  global?: boolean;
 }): Promise<void> {
+  const memoryDb = getScopedMemoryDb(ctx, opts);
+  const scope = memoryDb.getScope();
   const params: any = {};
 
   if (text) {
@@ -23,13 +26,14 @@ export async function updateCommand(ctx: CLIContext, id: string, text: string, o
     params.paths = opts.paths.split(',').map((p: string) => p.trim());
   }
 
-  const result = ctx.memoryDb.updateMemory(id, params);
+  const result = memoryDb.updateMemory(id, params);
 
   if (result.ok) {
     if (opts.json) {
       Output.json({
         ok: true,
         id,
+        scope,
         text: params.text ?? null,
         summary: params.summary ?? null,
         tags: params.tags ?? null,
@@ -44,6 +48,7 @@ export async function updateCommand(ctx: CLIContext, id: string, text: string, o
       Output.json({
         ok: false,
         id,
+        scope,
         error: result.message || 'Update failed',
       });
       process.exit(1);

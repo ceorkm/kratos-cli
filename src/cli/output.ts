@@ -76,6 +76,7 @@ export class Output {
     score?: number;
     snippet?: string;
     relevance?: string;
+    scope?: 'project' | 'global';
   }): void {
     const date = memory.created_at
       ? new Date(memory.created_at).toLocaleString()
@@ -91,7 +92,8 @@ export class Output {
       else if (pct > 0) relevanceTag = chalk.dim(` ${pct}%`);
     }
 
-    console.log(chalk.bold.white(`  ${memory.summary}`) + relevanceTag);
+    const scopeBadge = memory.scope === 'global' ? chalk.magenta(' [global]') : '';
+    console.log(chalk.bold.white(`  ${memory.summary}`) + scopeBadge + relevanceTag);
     console.log(chalk.dim(`  ID: ${memory.id}  |  ${date}  |  importance: ${memory.importance ?? '?'}`));
 
     if (memory.tags && memory.tags.length > 0) {

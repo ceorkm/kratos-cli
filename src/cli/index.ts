@@ -41,6 +41,7 @@ program
   .option('-p, --paths <paths>', 'Comma-separated file paths')
   .option('-i, --importance <level>', 'Importance 1-5 (default: 3)')
   .option('-c, --compress', 'Compress text before saving')
+  .option('-g, --global', 'Use global memory scope')
   .option('-j, --json', 'Output JSON')
   .action(async (text: string, opts) => {
     const ctx = await initCLIContext();
@@ -55,6 +56,7 @@ program
   .option('-l, --limit <n>', 'Max results (default: 10)')
   .option('-t, --tags <tags>', 'Filter by tags')
   .option('-d, --debug', 'Show debug info')
+  .option('-g, --global', 'Use global memory scope')
   .option('-j, --json', 'Output JSON')
   .option('--path-match', 'Require path matching')
   .action(async (query: string, opts) => {
@@ -81,6 +83,7 @@ program
   .description('Get recent memories')
   .option('-l, --limit <n>', 'Max results (default: 10)')
   .option('--path-prefix <prefix>', 'Filter by path prefix')
+  .option('-g, --global', 'Use global memory scope')
   .option('-j, --json', 'Output JSON')
   .action(async (opts) => {
     const ctx = await initCLIContext();
@@ -92,6 +95,7 @@ program
 program
   .command('get <id>')
   .description('Get a specific memory by ID')
+  .option('-g, --global', 'Use global memory scope')
   .option('-j, --json', 'Output JSON')
   .action(async (id: string, opts) => {
     const ctx = await initCLIContext();
@@ -106,6 +110,7 @@ program
   .option('-t, --tags <tags>', 'Replace tags (comma-separated)')
   .option('-i, --importance <level>', 'Update importance 1-5')
   .option('-p, --paths <paths>', 'Replace file paths (comma-separated)')
+  .option('-g, --global', 'Use global memory scope')
   .option('-j, --json', 'Output JSON')
   .action(async (id: string, text: string, opts) => {
     const ctx = await initCLIContext();
@@ -118,6 +123,7 @@ program
   .command('pin <id>')
   .description('Pin a memory — pinned memories always surface first')
   .option('-u, --unpin', 'Unpin the memory')
+  .option('-g, --global', 'Use global memory scope')
   .option('-j, --json', 'Output JSON')
   .action(async (id: string, opts) => {
     const ctx = await initCLIContext();
@@ -129,16 +135,18 @@ program
 program
   .command('export')
   .description('Export all memories as JSON')
-  .action(async () => {
+  .option('-g, --global', 'Use global memory scope')
+  .action(async (opts) => {
     const ctx = await initCLIContext();
     const { exportCommand } = await import('./commands/export.js');
-    await exportCommand(ctx, {});
+    await exportCommand(ctx, opts);
   });
 
 // ─── summary ────────────────────────────────────────────
 program
   .command('summary')
   .description('Generate a project summary from all memories')
+  .option('-g, --global', 'Use global memory scope')
   .option('-j, --json', 'Output JSON')
   .action(async (opts) => {
     const ctx = await initCLIContext();
@@ -150,6 +158,7 @@ program
 program
   .command('forget <id>')
   .description('Delete a memory by ID')
+  .option('-g, --global', 'Use global memory scope')
   .option('-j, --json', 'Output JSON')
   .action(async (id: string, opts) => {
     const ctx = await initCLIContext();

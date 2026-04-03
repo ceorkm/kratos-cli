@@ -1,18 +1,22 @@
-import type { CLIContext } from '../core.js';
+import { getScopedMemoryDb, type CLIContext } from '../core.js';
 import { Output } from '../output.js';
 
 export async function pinCommand(ctx: CLIContext, id: string, opts: {
   unpin?: boolean;
   json?: boolean;
+  global?: boolean;
 }): Promise<void> {
+  const memoryDb = getScopedMemoryDb(ctx, opts);
+  const scope = memoryDb.getScope();
   const pinned = !opts.unpin;
-  const result = ctx.memoryDb.pin(id, pinned);
+  const result = memoryDb.pin(id, pinned);
 
   if (result.ok) {
     if (opts.json) {
       Output.json({
         ok: true,
         id,
+        scope,
         pinned,
         message: result.message || null,
       });
@@ -24,6 +28,7 @@ export async function pinCommand(ctx: CLIContext, id: string, opts: {
       Output.json({
         ok: false,
         id,
+        scope,
         pinned,
         error: result.message || 'Pin failed',
       });

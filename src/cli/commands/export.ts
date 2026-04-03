@@ -1,10 +1,13 @@
-import type { CLIContext } from '../core.js';
+import { getScopedMemoryDb, type CLIContext } from '../core.js';
 import { Output } from '../output.js';
 
 export async function exportCommand(ctx: CLIContext, opts: {
   format?: string;
+  global?: boolean;
 }): Promise<void> {
-  const memories = ctx.memoryDb.getAll();
+  const memoryDb = getScopedMemoryDb(ctx, opts);
+  const scope = memoryDb.getScope();
+  const memories = memoryDb.getAll();
 
   if (memories.length === 0) {
     Output.warn('No memories to export');
@@ -12,12 +15,14 @@ export async function exportCommand(ctx: CLIContext, opts: {
   }
 
   const exported = {
+    scope,
     project: ctx.project.name,
     project_id: ctx.project.id,
     exported_at: new Date().toISOString(),
     count: memories.length,
     memories: memories.map(m => ({
       id: m.id,
+      scope,
       summary: m.summary,
       text: m.text,
       tags: m.tags,

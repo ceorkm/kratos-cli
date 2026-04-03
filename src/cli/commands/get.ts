@@ -1,10 +1,13 @@
-import type { CLIContext } from '../core.js';
+import { getScopedMemoryDb, type CLIContext } from '../core.js';
 import { Output } from '../output.js';
 
 export async function getCommand(ctx: CLIContext, id: string, opts: {
   json?: boolean;
+  global?: boolean;
 } = {}): Promise<void> {
-  const memory = ctx.memoryDb.get(id);
+  const memoryDb = getScopedMemoryDb(ctx, opts);
+  const scope = memoryDb.getScope();
+  const memory = memoryDb.get(id);
 
   if (!memory) {
     Output.error(`Memory not found: ${id}`);
@@ -12,13 +15,14 @@ export async function getCommand(ctx: CLIContext, id: string, opts: {
   }
 
   if (opts.json) {
-    Output.json(memory);
+    Output.json({ ...memory, scope });
     return;
   }
 
   Output.header('Memory Details');
   console.log('');
   Output.info(`ID:         ${memory.id}`);
+  Output.info(`Scope:      ${scope}`);
   Output.info(`Summary:    ${memory.summary}`);
   Output.info(`Importance: ${memory.importance}`);
   Output.info(`Created:    ${new Date(memory.created_at).toLocaleString()}`);

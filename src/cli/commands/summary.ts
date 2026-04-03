@@ -1,11 +1,14 @@
-import type { CLIContext } from '../core.js';
+import { getScopedMemoryDb, type CLIContext } from '../core.js';
 import { Output } from '../output.js';
 import chalk from 'chalk';
 
 export async function summaryCommand(ctx: CLIContext, opts: {
   json?: boolean;
+  global?: boolean;
 } = {}): Promise<void> {
-  const memories = ctx.memoryDb.getAll();
+  const memoryDb = getScopedMemoryDb(ctx, opts);
+  const scope = memoryDb.getScope();
+  const memories = memoryDb.getAll();
 
   if (memories.length === 0) {
     Output.warn('No memories found. Save some first.');
@@ -48,6 +51,7 @@ export async function summaryCommand(ctx: CLIContext, opts: {
 
   if (opts.json) {
     Output.json({
+      scope,
       project: ctx.project.name,
       memory_count: memories.length,
       topic_count: totalTags.size,
@@ -57,12 +61,14 @@ export async function summaryCommand(ctx: CLIContext, opts: {
       },
       pinned: pinned.map(m => ({
         id: m.id,
+        scope,
         summary: m.summary,
         text: m.text,
         tags: m.tags,
       })),
       key_decisions: keyDecisions.map(m => ({
         id: m.id,
+        scope,
         summary: m.summary,
         text: m.text,
         tags: m.tags.filter(t => t !== '__pinned'),
@@ -71,6 +77,7 @@ export async function summaryCommand(ctx: CLIContext, opts: {
       topics: topics.map(([tag, mems]) => ({ tag, count: mems.length })),
       recent: recent.map(m => ({
         id: m.id,
+        scope,
         summary: m.summary,
         created_at: m.created_at,
       })),

@@ -42,16 +42,31 @@ export interface EnhancedSearchResult {
   };
 }
 
+export type MemoryDatabaseScopeConfig =
+  | { scope: 'project'; projectRoot: string; projectId: string }
+  | { scope: 'global' };
+
 export class MemoryDatabase {
   private db: Database.Database;
   private projectId: string;
   private projectRoot: string;
-  constructor(projectRoot: string, projectId: string) {
-    this.projectRoot = projectRoot;
-    this.projectId = projectId;
+  private scope: 'project' | 'global';
+
+  constructor(projectRoot: string, projectId: string);
+  constructor(config: MemoryDatabaseScopeConfig);
+  constructor(
+    projectRootOrConfig: string | MemoryDatabaseScopeConfig,
+    projectId?: string
+  ) {
+    const config = this.normalizeConfig(projectRootOrConfig, projectId);
+    this.scope = config.scope;
+    this.projectRoot = config.projectRoot;
+    this.projectId = config.projectId;
 
     const kratosHome = path.join(process.env.HOME || process.env.USERPROFILE || '', '.kratos');
-    const dbDir = path.join(kratosHome, 'projects', projectId, 'databases');
+    const dbDir = this.scope === 'global'
+      ? path.join(kratosHome, 'global')
+      : path.join(kratosHome, 'projects', this.projectId, 'databases');
     const dbPath = path.join(dbDir, 'memories.db');
 
     // Only mkdir if needed
@@ -72,6 +87,10 @@ export class MemoryDatabase {
       this.ensureSchema();
     }
     // No setInterval — CLI commands are one-shot
+  }
+
+  getScope(): 'project' | 'global' {
+    return this.scope;
   }
 
   close(): void {
@@ -1083,6 +1102,36 @@ export class MemoryDatabase {
     return `mem_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
   }
 
+  private normalizeConfig(
+    projectRootOrConfig: string | MemoryDatabaseScopeConfig,
+    projectId?: string
+  ): { scope: 'project' | 'global'; projectRoot: string; projectId: string } {
+    if (typeof projectRootOrConfig === 'string') {
+      if (!projectId) {
+        throw new Error('MemoryDatabase(projectRoot, projectId) requires a projectId');
+      }
+      return {
+        scope: 'project',
+        projectRoot: projectRootOrConfig,
+        projectId,
+      };
+    }
+
+    if (projectRootOrConfig.scope === 'global') {
+      return {
+        scope: 'global',
+        projectRoot: '',
+        projectId: '__global__',
+      };
+    }
+
+    return {
+      scope: 'project',
+      projectRoot: projectRootOrConfig.projectRoot,
+      projectId: projectRootOrConfig.projectId,
+    };
+  }
+
   private computeDedupeHash(params: {
     summary: string;
     text: string;
@@ -1094,7 +1143,9 @@ export class MemoryDatabase {
       summary: params.summary.trim().toLowerCase(),
       text: params.text.trim(),
       tags: [...params.tags].map(tag => tag.trim().toLowerCase()).sort(),
-      paths: [...params.paths].map(filePath => filePath.trim()).sort(),
+      ...(this.scope === 'project'
+        ? { paths: [...params.paths].map(filePath => filePath.trim()).sort() }
+        : {}),
       importance: params.importance,
     });
     return crypto.createHash('md5').update(normalized).digest('hex');

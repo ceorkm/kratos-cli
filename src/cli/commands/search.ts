@@ -1,4 +1,4 @@
-import type { CLIContext } from '../core.js';
+import { getScopedMemoryDb, type CLIContext } from '../core.js';
 import { Output } from '../output.js';
 import type { SearchResult } from '../../memory-server/database.js';
 
@@ -8,12 +8,15 @@ export async function searchCommand(ctx: CLIContext, query: string, opts: {
   debug?: boolean;
   pathMatch?: boolean;
   json?: boolean;
+  global?: boolean;
 }): Promise<void> {
+  const memoryDb = getScopedMemoryDb(ctx, opts);
+  const scope = memoryDb.getScope();
   const k = opts.limit ? parseInt(opts.limit, 10) : 10;
   const tags = opts.tags ? opts.tags.split(',').map(t => t.trim()) : undefined;
 
   if (opts.debug) {
-    const enhanced = ctx.memoryDb.searchWithDebug({
+    const enhanced = memoryDb.searchWithDebug({
       q: query,
       k,
       tags,
@@ -23,8 +26,9 @@ export async function searchCommand(ctx: CLIContext, query: string, opts: {
     if (opts.json) {
       Output.json({
         query,
+        scope,
         count: enhanced.results.length,
-        results: serializeResults(enhanced.results),
+        results: serializeResults(enhanced.results, scope),
         debug_info: enhanced.debug_info,
       });
       return;
@@ -36,9 +40,9 @@ export async function searchCommand(ctx: CLIContext, query: string, opts: {
       Output.warn(`Fallback used: ${enhanced.debug_info.fallback_used}`);
     }
 
-    renderResults(enhanced.results);
+    renderResults(enhanced.results, scope);
   } else {
-    const results = ctx.memoryDb.search({
+    const results = memoryDb.search({
       q: query,
       k,
       tags,
@@ -48,8 +52,9 @@ export async function searchCommand(ctx: CLIContext, query: string, opts: {
     if (opts.json) {
       Output.json({
         query,
+        scope,
         count: results.length,
-        results: serializeResults(results),
+        results: serializeResults(results, scope),
       });
       return;
     }
@@ -57,13 +62,14 @@ export async function searchCommand(ctx: CLIContext, query: string, opts: {
     Output.header(`Search results for "${query}"`);
     Output.dim(`Found ${results.length} results`);
 
-    renderResults(results);
+    renderResults(results, scope);
   }
 }
 
-function serializeResults(results: SearchResult[]) {
+function serializeResults(results: SearchResult[], scope: 'project' | 'global') {
   return results.map(r => ({
     id: r.memory.id,
+    scope,
     summary: r.memory.summary,
     text: r.memory.text,
     tags: r.memory.tags,
@@ -83,7 +89,7 @@ function serializeResults(results: SearchResult[]) {
   }));
 }
 
-function renderResults(results: SearchResult[]): void {
+function renderResults(results: SearchResult[], scope: 'project' | 'global'): void {
   for (const r of results) {
     Output.memoryCard({
       id: r.memory.id,
@@ -95,6 +101,7 @@ function renderResults(results: SearchResult[]): void {
       created_at: r.memory.created_at,
       score: r.score,
       snippet: r.snippet,
+      scope,
     });
   }
 }

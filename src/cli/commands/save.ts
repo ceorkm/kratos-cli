@@ -1,4 +1,4 @@
-import type { CLIContext } from '../core.js';
+import { getScopedMemoryDb, type CLIContext } from '../core.js';
 import { Output } from '../output.js';
 
 export async function saveCommand(ctx: CLIContext, text: string, opts: {
@@ -7,7 +7,10 @@ export async function saveCommand(ctx: CLIContext, text: string, opts: {
   importance?: string;
   compress?: boolean;
   json?: boolean;
+  global?: boolean;
 }): Promise<void> {
+  const memoryDb = getScopedMemoryDb(ctx, opts);
+  const scope = memoryDb.getScope();
   const tags = opts.tags ? opts.tags.split(',').map(t => t.trim()) : [];
   const paths = opts.paths ? opts.paths.split(',').map(p => p.trim()) : [];
   const importance = opts.importance ? parseInt(opts.importance, 10) : 3;
@@ -30,7 +33,7 @@ export async function saveCommand(ctx: CLIContext, text: string, opts: {
     }
   }
 
-  const result = ctx.memoryDb.save({
+  const result = memoryDb.save({
     summary,
     text: fullText,
     tags,
@@ -44,6 +47,7 @@ export async function saveCommand(ctx: CLIContext, text: string, opts: {
     Output.json({
       ok: true,
       id,
+      scope,
       project: ctx.project.name,
       summary,
       text: fullText,
@@ -61,12 +65,15 @@ export async function saveCommand(ctx: CLIContext, text: string, opts: {
   }
 
   if (scanResult.hasPII || scanResult.hasSecrets) {
-    Output.warn('PII or secrets detected in memory text. Saving anyway.');
+    const warningMessage = scope === 'global'
+      ? 'PII or secrets detected. Global memories are visible across ALL projects. Saving anyway.'
+      : 'PII or secrets detected in memory text. Saving anyway.';
+    Output.warn(warningMessage);
     for (const finding of scanResult.findings) {
       Output.dim(`  - ${finding.pattern} (${finding.type}, confidence: ${finding.confidence}) -> ${finding.redacted}`);
     }
   }
 
   Output.success(`Memory saved: ${id}`);
-  Output.dim(`Project: ${ctx.project.name} | Tags: ${tags.join(', ') || 'none'} | Importance: ${importance}`);
+  Output.dim(`${scope === 'global' ? 'Scope: global' : `Project: ${ctx.project.name}`} | Tags: ${tags.join(', ') || 'none'} | Importance: ${importance}`);
 }

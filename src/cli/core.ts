@@ -4,6 +4,8 @@ import { ProjectManager, type Project } from '../project-manager.js';
 export interface CLIContext {
   projectManager: ProjectManager;
   memoryDb: MemoryDatabase;
+  projectMemoryDb: MemoryDatabase;
+  globalMemoryDb: MemoryDatabase;
   project: Project;
   // PIIDetector loaded lazily — only commands that need it will import it
   getPIIDetector: () => Promise<import('../security/pii-detector.js').PIIDetector>;
@@ -16,7 +18,9 @@ export async function initCLIContext(): Promise<CLIContext> {
   const projectManager = new ProjectManager();
   const workingDir = process.env.KRATOS_PROJECT_ROOT || process.cwd();
   const project = await projectManager.detectProject(workingDir);
-  const memoryDb = new MemoryDatabase(project.root, project.id);
+  const projectMemoryDb = new MemoryDatabase(project.root, project.id);
+  const globalMemoryDb = new MemoryDatabase({ scope: 'global' });
+  const memoryDb = projectMemoryDb;
 
   // Lazy PII detector — only loaded when save/scan commands need it
   let _piiDetector: import('../security/pii-detector.js').PIIDetector | null = null;
@@ -28,5 +32,19 @@ export async function initCLIContext(): Promise<CLIContext> {
     return _piiDetector;
   };
 
-  return { projectManager, memoryDb, project, getPIIDetector };
+  return {
+    projectManager,
+    memoryDb,
+    projectMemoryDb,
+    globalMemoryDb,
+    project,
+    getPIIDetector,
+  };
+}
+
+export function getScopedMemoryDb(
+  ctx: CLIContext,
+  opts?: { global?: boolean }
+): MemoryDatabase {
+  return opts?.global ? ctx.globalMemoryDb : ctx.memoryDb;
 }
