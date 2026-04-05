@@ -196,9 +196,13 @@ export class ProjectManager {
     }
   }
 
+  // WARNING: DO NOT CHANGE THIS FUNCTION'S OUTPUT.
+  // Every existing user's memories are stored under the hash this produces.
+  // Changing the hashing (e.g. removing toLowerCase, changing the algorithm,
+  // or altering normalization) will orphan every existing project's database.
+  // This happened once already (v1.5.0 → v1.6.1) and required a migration fix.
   private generateProjectId(projectPath: string): string {
-    // Don't lowercase — preserve case sensitivity for filesystems that distinguish it
-    const normalized = this.normalizeProjectPath(projectPath);
+    const normalized = this.normalizeProjectPath(projectPath).toLowerCase();
     const hash = crypto.createHash('sha256').update(normalized).digest('hex');
     return `proj_${hash.substring(0, 12)}`;
   }
