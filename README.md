@@ -61,7 +61,7 @@ That's it. No global install needed. Auto-detects your project.
 | `npx kratos-memory scan <text>` | Detect PII and secrets (`--redact`, `--json`) |
 | `npx kratos-memory context` | Compact memory block for session injection (`--budget`, `--json`) |
 | `npx kratos-memory summary` | Project report: decisions, topics, most-touched files, prune candidates |
-| `npx kratos-memory hooks install` | Install hooks: memory injection, auto-capture, git commit capture |
+| `npx kratos-memory hooks install` | Install hooks (Claude Code + Codex): memory injection, auto-capture, git commit capture |
 
 Kratos also supports machine-readable output for automation-heavy workflows. Use `--json` on the core read/write commands when you want agents, scripts, or CI to parse results safely.
 
@@ -91,9 +91,13 @@ No prompting, no relying on the model to remember to check memory — the hooks 
 
 ### Codex
 
+The same install command also writes `.codex/hooks.json` with identical lifecycle hooks (SessionStart memory injection, auto-capture, session summary):
+
+```bash
+npx kratos-memory hooks install
 ```
-> use npx kratos-memory CLI for memory. search for context at the start, save decisions as you go.
-```
+
+Then run `/hooks` once inside Codex to trust them — Codex requires explicit approval for project hooks.
 
 ### Cursor / Cline / Any agent
 

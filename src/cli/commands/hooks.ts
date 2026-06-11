@@ -27,6 +27,29 @@ const KRATOS_HOOKS: Record<string, any[]> = {
 
 const HOOK_EVENTS = Object.keys(KRATOS_HOOKS);
 
+// Codex (OpenAI) lifecycle hooks — same event names and nested schema as
+// Claude Code, discovered at <repo>/.codex/hooks.json. Tool names differ
+// (apply_patch) and SessionStart takes a source matcher.
+const KRATOS_CODEX_HOOKS: Record<string, any[]> = {
+  SessionStart: [
+    {
+      matcher: 'startup|resume|clear',
+      hooks: [{ type: 'command', command: 'kratos context', statusMessage: 'Loading Kratos memory', timeout: 30 }],
+    },
+  ],
+  PostToolUse: [
+    {
+      matcher: 'Edit|Write|apply_patch',
+      hooks: [{ type: 'command', command: 'kratos capture --event post-tool-use', timeout: 30 }],
+    },
+  ],
+  Stop: [
+    {
+      hooks: [{ type: 'command', command: 'kratos capture --event session-end', timeout: 30 }],
+    },
+  ],
+};
+
 const GIT_HOOK_START = '# >>> kratos-memory post-commit >>>';
 const GIT_HOOK_END = '# <<< kratos-memory post-commit <<<';
 const GIT_HOOK_BLOCK = [
@@ -105,7 +128,62 @@ async function installHooks(): Promise<void> {
   Output.dim('PostToolUse:  captures file edits (Edit/Write/MultiEdit)');
   Output.dim('Stop:         saves a session summary');
 
+  await installCodexHooks();
   await installGitHook();
+}
+
+function codexHooksPath(): string {
+  return path.join(process.cwd(), '.codex', 'hooks.json');
+}
+
+async function installCodexHooks(): Promise<void> {
+  const hooksPath = codexHooksPath();
+  await fs.ensureDir(path.dirname(hooksPath));
+
+  let config: any = {};
+  if (await fs.pathExists(hooksPath)) {
+    try {
+      config = await fs.readJson(hooksPath);
+    } catch {
+      config = {};
+    }
+  }
+
+  if (!config.hooks) config.hooks = {};
+  for (const event of Object.keys(KRATOS_CODEX_HOOKS)) {
+    const others = (config.hooks[event] || []).filter((e: any) => !isKratosEntry(e));
+    config.hooks[event] = [...others, ...KRATOS_CODEX_HOOKS[event]];
+  }
+
+  await fs.writeJson(hooksPath, config, { spaces: 2 });
+  Output.dim(`Codex:        same hooks written to ${path.relative(process.cwd(), hooksPath)}`);
+  Output.dim('              run /hooks inside Codex once to trust them');
+}
+
+async function uninstallCodexHooks(): Promise<void> {
+  const hooksPath = codexHooksPath();
+  if (!await fs.pathExists(hooksPath)) return;
+
+  try {
+    const config = await fs.readJson(hooksPath);
+    if (!config.hooks) return;
+
+    for (const event of Object.keys(config.hooks)) {
+      config.hooks[event] = (config.hooks[event] || []).filter((e: any) => !isKratosEntry(e));
+      if (config.hooks[event].length === 0) delete config.hooks[event];
+    }
+
+    if (Object.keys(config.hooks).length === 0) delete config.hooks;
+
+    if (Object.keys(config).length === 0) {
+      await fs.remove(hooksPath);
+    } else {
+      await fs.writeJson(hooksPath, config, { spaces: 2 });
+    }
+    Output.dim('Codex hooks removed');
+  } catch {
+    // Unreadable — leave it alone
+  }
 }
 
 async function installGitHook(): Promise<void> {
@@ -192,6 +270,7 @@ async function uninstallHooks(): Promise<void> {
     process.exit(1);
   }
 
+  await uninstallCodexHooks();
   await uninstallGitHook();
 }
 
@@ -232,6 +311,19 @@ async function checkHooksStatus(): Promise<void> {
           (e: any) => isKratosEntry(e) && !isLegacyEntry(e)
         ).length;
         if (count > 0) Output.dim(`${event}: ${count}`);
+      }
+    }
+
+    const codexPath = codexHooksPath();
+    if (await fs.pathExists(codexPath)) {
+      try {
+        const codexConfig = await fs.readJson(codexPath);
+        const codexCount = Object.values(codexConfig.hooks || {})
+          .flat()
+          .filter((e: any) => isKratosEntry(e)).length;
+        if (codexCount > 0) Output.dim(`Codex hooks: ${codexCount} (trust via /hooks in Codex)`);
+      } catch {
+        // Unreadable codex config — skip
       }
     }
 

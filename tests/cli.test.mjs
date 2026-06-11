@@ -494,3 +494,29 @@ test('ask learns vocabulary from project memories (no hardcoded synonyms)', () =
     { cwd: project, home: sandbox.home }).stdout);
   assert.equal(miss.count, 0);
 });
+
+test('hooks install writes Codex hooks.json and uninstall preserves user entries', () => {
+  const sandbox = makeSandbox();
+  const project = makeProject(sandbox.workspace, 'codex-proj');
+
+  const codexDir = path.join(project, '.codex');
+  fs.mkdirSync(codexDir, { recursive: true });
+  fs.writeFileSync(path.join(codexDir, 'hooks.json'), JSON.stringify({
+    hooks: { PreToolUse: [{ matcher: '^Bash$', hooks: [{ type: 'command', command: 'echo user-codex-hook' }] }] },
+  }, null, 2));
+
+  runCli(['hooks', 'install'], { cwd: project, home: sandbox.home });
+
+  const config = JSON.parse(fs.readFileSync(path.join(codexDir, 'hooks.json'), 'utf8'));
+  assert.equal(config.hooks.SessionStart[0].hooks[0].command, 'kratos context');
+  assert.match(config.hooks.PostToolUse.at(-1).matcher, /apply_patch/);
+  assert.equal(config.hooks.Stop[0].hooks[0].command, 'kratos capture --event session-end');
+  assert.notEqual(config.hooks.PreToolUse.find(e =>
+    e.hooks?.some(h => h.command === 'echo user-codex-hook')), undefined);
+
+  runCli(['hooks', 'uninstall'], { cwd: project, home: sandbox.home });
+  const after = JSON.parse(fs.readFileSync(path.join(codexDir, 'hooks.json'), 'utf8'));
+  assert.equal(after.hooks.SessionStart, undefined);
+  assert.notEqual(after.hooks.PreToolUse.find(e =>
+    e.hooks?.some(h => h.command === 'echo user-codex-hook')), undefined);
+});
