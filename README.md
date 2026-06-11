@@ -52,7 +52,7 @@ That's it. No global install needed. Auto-detects your project.
 |---------|-------------|
 | `npx kratos-memory save <text>` | Save a memory (`--tags`, `--importance 1-5`, `--paths`, `--compress`, `--json`) |
 | `npx kratos-memory search <query>` | Full-text search with FTS5 (`--limit`, `--tags`, `--debug`, `--json`) |
-| `npx kratos-memory ask <question>` | Natural language query (`--json`) |
+| `npx kratos-memory ask <question>` | Natural language query — learns vocabulary from your own memories (`--json`) |
 | `npx kratos-memory recent` | Recent memories (`--limit`, `--json`) |
 | `npx kratos-memory get <id>` | Full memory details (`--json`) |
 | `npx kratos-memory forget <id>` | Delete a memory (`--json`) |

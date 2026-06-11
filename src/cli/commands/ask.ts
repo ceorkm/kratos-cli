@@ -1,18 +1,18 @@
 import type { CLIContext } from '../core.js';
 import { Output } from '../output.js';
 import chalk from 'chalk';
-import type { SearchResult } from '../../memory-server/database.js';
+import type { Memory, SearchResult } from '../../memory-server/database.js';
 
 type AskIntent = 'search' | 'list' | 'explain' | 'find';
-type AskDomain = 'infra' | 'auth' | 'billing' | 'ops' | 'data' | 'cache';
 
 interface ParsedQuestion {
   intent: AskIntent;
   searchTerms: string[];
   expandedTerms: string[];
   rawTerms: string[];
-  domains: AskDomain[];
   normalizedQuestion: string;
+  // Each search term mapped to itself + its synonyms/learned expansions
+  termExpansions: Map<string, string[]>;
 }
 
 const STOP_WORDS = new Set([
@@ -21,63 +21,90 @@ const STOP_WORDS = new Set([
   'by', 'from', 'did', 'do', 'does', 'is', 'are', 'was', 'were',
   'have', 'has', 'had', 'can', 'could', 'would', 'should', 'will',
   'know', 'tell', 'give', 'learned', 'remember', 'recall', 'work',
-  'into', 'over', 'after', 'use', 'using', 'anywhere', 'there',
+  'into', 'over', 'after', 'use', 'uses', 'used', 'using', 'anywhere', 'there',
+  'this', 'that', 'these', 'those', 'and', 'but', 'not', 'you',
+  'our', 'your', 'their', 'its', 'his', 'her', 'they', 'them',
+  'anything', 'something', 'everything', 'stuff', 'things',
 ]);
 
-const TOKEN_SYNONYMS: Record<string, string[]> = {
-  ssh: ['ssh', 'server', 'vps'],
-  vps: ['vps', 'server', 'ssh'],
-  server: ['server', 'vps', 'ssh'],
-  box: ['box', 'server', 'ssh'],
-  boxes: ['boxes', 'server', 'ssh'],
-  machine: ['machine', 'server'],
-  machines: ['machines', 'server'],
-  private: ['private', 'internal'],
-  internal: ['internal', 'private'],
-  sign: ['sign', 'login', 'auth'],
-  login: ['login', 'auth'],
-  auth: ['auth', 'login', 'jwt'],
-  token: ['token', 'tokens', 'jwt', 'auth'],
-  tokens: ['tokens', 'token', 'jwt', 'auth'],
-  cookie: ['cookie', 'cookies', 'auth'],
-  cookies: ['cookies', 'cookie', 'auth'],
-  billing: ['billing', 'webhooks', 'stripe'],
-  webhook: ['webhook', 'webhooks', 'stripe'],
-  webhooks: ['webhooks', 'webhook', 'stripe'],
-  stripe: ['stripe', 'billing', 'webhooks'],
-  backup: ['backup', 'backups', 'postgres'],
-  backups: ['backups', 'backup', 'postgres'],
-  postgres: ['postgres', 'backup', 'backups'],
-  redis: ['redis', 'rate', 'locks'],
-  rate: ['rate', 'redis', 'limiting'],
-  alert: ['alert', 'alerts', 'ops', 'sentry'],
-  alerts: ['alerts', 'alert', 'ops', 'sentry'],
-  sentry: ['sentry', 'alerts', 'errors'],
-};
-
-const PHRASE_SYNONYMS: Array<[RegExp, string[]]> = [
-  [/\bsign\s+in(to)?\b/, ['login', 'auth']],
-  [/\blog\s+in(to)?\b/, ['login', 'auth']],
-  [/\blog\s+into\b/, ['ssh', 'server']],
-  [/\benter\s+the\s+box\b/, ['ssh', 'server']],
-  [/\benter\s+the\s+server\b/, ['ssh', 'server']],
-  [/\bprivate\s+machines?\b/, ['internal', 'boxes', 'tailscale', 'ssh']],
-  [/\binternal\s+machines?\b/, ['internal', 'boxes', 'tailscale', 'ssh']],
-  [/\baccess\s+the\s+vps\b/, ['ssh', 'vps']],
-  [/\baccess\s+the\s+server\b/, ['ssh', 'server']],
-  [/\blogin\s+security\b/, ['auth', 'login', 'jwt', 'cookies']],
-];
-
-const DOMAIN_KEYWORDS: Record<AskDomain, string[]> = {
-  infra: ['ssh', 'server', 'vps', 'box', 'boxes', 'machine', 'machines', 'tailscale', 'docker', 'deploy', 'pm2', 'internal', 'private'],
-  auth: ['auth', 'jwt', 'token', 'tokens', 'cookie', 'cookies', 'signin', 'security'],
-  billing: ['billing', 'webhook', 'webhooks', 'stripe', 'invoice'],
-  ops: ['sentry', 'alert', 'alerts', 'ops', 'monitor', 'errors', 'slack'],
-  data: ['postgres', 'backup', 'backups', 'storage', 'database'],
-  cache: ['redis', 'rate', 'limiting', 'locks', 'lock', 'ephemeral'],
-};
-
 const STRICT_QUERY_TERMS = new Set(['password', 'passphrase', 'secret', 'credential', 'credentials']);
+
+// Language-level synonyms only — universal English/devops words, never product
+// or project vocabulary (that's learned from the user's own memories below).
+const GENERIC_SYNONYMS: Record<string, string[]> = {
+  machine: ['server', 'box', 'host'],
+  machines: ['server', 'box', 'host'],
+  box: ['server', 'machine', 'host'],
+  boxes: ['server', 'machine', 'host'],
+  server: ['host', 'machine', 'box'],
+  servers: ['host', 'machine', 'box'],
+  private: ['internal'],
+  internal: ['private'],
+  sign: ['auth', 'login'],
+  signin: ['auth', 'login'],
+  login: ['auth', 'signin'],
+  remove: ['delete'],
+  delete: ['remove'],
+};
+
+/**
+ * Vocabulary learned from this project's own memories. Terms that co-occur in
+ * saved memories become query expansions — no hardcoded synonym tables, so it
+ * adapts to whatever stack the project actually uses.
+ */
+class LearnedVocabulary {
+  private termDocs = new Map<string, Set<number>>();
+  private docCount = 0;
+
+  constructor(memories: Memory[]) {
+    this.docCount = memories.length;
+    memories.forEach((memory, idx) => {
+      const corpus = [
+        memory.summary,
+        memory.text.slice(0, 400),
+        ...(memory.tags || []).filter(t => t !== '__pinned'),
+        ...(memory.paths || []).map(p => p.split('/').pop() || ''),
+      ].join(' ');
+
+      for (const token of new Set(tokenize(corpus))) {
+        if (STOP_WORDS.has(token)) continue;
+        if (!this.termDocs.has(token)) this.termDocs.set(token, new Set());
+        this.termDocs.get(token)!.add(idx);
+      }
+    });
+  }
+
+  /** Top co-occurring terms for a query term, strongest associations first. */
+  expand(term: string, max = 3): string[] {
+    const docs = this.termDocs.get(term);
+    if (!docs || docs.size === 0) return [];
+
+    const scores = new Map<string, number>();
+    // Terms in more than half the corpus are too generic to expand with
+    const ubiquityCap = Math.max(2, Math.ceil(this.docCount / 2));
+
+    for (const [other, otherDocs] of this.termDocs) {
+      if (other === term) continue;
+      if (otherDocs.size > ubiquityCap) continue;
+      let co = 0;
+      for (const doc of docs) {
+        if (otherDocs.has(doc)) co++;
+      }
+      if (co === 0) continue;
+      // Need repeated co-occurrence unless the term itself is rare
+      if (co < 2 && docs.size > 2) continue;
+      // An expansion is only useful if it reaches memories the original term
+      // doesn't — reward terms that also appear in other docs
+      if (otherDocs.size <= co) continue;
+      scores.set(other, co * Math.log(1 + otherDocs.size));
+    }
+
+    return [...scores.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, max)
+      .map(([t]) => t);
+  }
+}
 
 export async function askCommand(ctx: CLIContext, question: string, opts: {
   limit?: string;
@@ -85,7 +112,8 @@ export async function askCommand(ctx: CLIContext, question: string, opts: {
 }): Promise<void> {
   const limit = opts.limit ? parseInt(opts.limit, 10) : 10;
 
-  const parsed = parseNaturalLanguageQuery(question);
+  const vocabulary = new LearnedVocabulary(ctx.memoryDb.getAll());
+  const parsed = parseNaturalLanguageQuery(question, vocabulary);
   const searchQuery = parsed.searchTerms.join(' ');
 
   if (!searchQuery) {
@@ -209,16 +237,9 @@ function synthesizeAnswer(results: Array<{ memory: { summary: string; text: stri
     .join('\n');
 }
 
-function parseNaturalLanguageQuery(question: string): ParsedQuestion {
+function parseNaturalLanguageQuery(question: string, vocabulary: LearnedVocabulary): ParsedQuestion {
   const lowerQ = question.toLowerCase();
   const normalizedQuestion = normalizeWhitespace(lowerQ.replace(/[^\w\s]/g, ' '));
-  const expandedSet = new Set<string>();
-
-  for (const [pattern, expansions] of PHRASE_SYNONYMS) {
-    if (pattern.test(lowerQ)) {
-      expansions.forEach(term => expandedSet.add(term));
-    }
-  }
 
   const rawTerms = normalizedQuestion
     .split(/\s+/)
@@ -227,8 +248,16 @@ function parseNaturalLanguageQuery(question: string): ParsedQuestion {
   const words = rawTerms
     .filter(word => word.length > 2 && !STOP_WORDS.has(word));
 
+  // Expand each term: generic English synonyms + vocabulary learned from
+  // this project's own memories
+  const expandedSet = new Set<string>();
+  const termExpansions = new Map<string, string[]>();
   for (const word of words) {
-    const expansions = TOKEN_SYNONYMS[word] || [word];
+    const expansions = uniquePreservingOrder([
+      ...(GENERIC_SYNONYMS[word] || []),
+      ...vocabulary.expand(word),
+    ]);
+    termExpansions.set(word, [word, ...expansions]);
     expansions.forEach(term => expandedSet.add(term));
   }
 
@@ -239,9 +268,8 @@ function parseNaturalLanguageQuery(question: string): ParsedQuestion {
 
   const searchTerms = uniquePreservingOrder(words);
   const expandedTerms = uniquePreservingOrder([...searchTerms, ...expandedSet].filter(term => term.length > 2));
-  const domains = detectDomains(expandedTerms);
 
-  return { searchTerms, expandedTerms, rawTerms, domains, intent, normalizedQuestion };
+  return { searchTerms, expandedTerms, rawTerms, intent, normalizedQuestion, termExpansions };
 }
 
 function buildSearchPlan(parsed: ParsedQuestion, limit: number): string[] {
@@ -251,21 +279,13 @@ function buildSearchPlan(parsed: ParsedQuestion, limit: number): string[] {
     variants.push(parsed.searchTerms.join(' '));
   }
 
-  if (parsed.expandedTerms.length > 0) {
+  if (parsed.expandedTerms.length > parsed.searchTerms.length) {
     variants.push(parsed.expandedTerms.join(' '));
   }
 
   const strongTerms = parsed.expandedTerms.filter(term => term.length >= 4);
   if (strongTerms.length > 1) {
     variants.push(strongTerms.slice(0, Math.min(5, Math.max(3, limit))).join(' '));
-  }
-
-  for (const domain of parsed.domains) {
-    const keywords = DOMAIN_KEYWORDS[domain];
-    const domainTerms = keywords.filter(keyword => parsed.expandedTerms.includes(keyword));
-    const seed = domainTerms.length > 0 ? domainTerms : keywords.slice(0, 3);
-    variants.push(uniquePreservingOrder(seed).slice(0, 4).join(' '));
-    uniquePreservingOrder(seed).slice(0, 3).forEach(term => variants.push(term));
   }
 
   for (const term of parsed.expandedTerms.filter(term => term.length >= 3)) {
@@ -305,56 +325,52 @@ function runAskSearch(ctx: CLIContext, parsed: ParsedQuestion, queries: string[]
     })
     .slice(0, limit);
 
-  if (parsed.domains.length > 1) {
-    const strongMatches = ranked.filter(result => countSharedDomains(parsed, result) >= Math.min(2, parsed.domains.length));
-    if (strongMatches.length === 0) {
-      return [];
-    }
-    return strongMatches;
+  // Multi-term questions must be fully covered: every meaningful word (or one
+  // of its expansions) has to appear in the memory. Stops cross-topic false
+  // positives like "what machine do I ssh to for billing" matching pure-ssh notes.
+  let gated = ranked;
+  if (parsed.searchTerms.length >= 3) {
+    gated = ranked.filter(result => {
+      const memoryTerms = new Set(extractMemoryTerms(result.memory).map(singularize));
+      return parsed.searchTerms.every(term => {
+        const candidates = parsed.termExpansions.get(term) || [term];
+        return candidates.some(candidate => memoryTerms.has(singularize(candidate)));
+      });
+    });
   }
 
   const strictTerms = parsed.searchTerms.filter(term => STRICT_QUERY_TERMS.has(term));
   if (strictTerms.length > 0) {
-    return ranked.filter(result => {
+    return gated.filter(result => {
       const memoryTerms = extractMemoryTerms(result.memory);
       return strictTerms.every(term => memoryTerms.includes(term));
     });
   }
 
-  return ranked;
+  return gated;
+}
+
+/** Naive plural folding so "machines" covers "machine", "boxes" covers "box". */
+function singularize(term: string): string {
+  if (term.length > 4 && term.endsWith('es')) return term.slice(0, -2);
+  if (term.length > 3 && term.endsWith('s')) return term.slice(0, -1);
+  return term;
 }
 
 function rerankResult(result: SearchResult, parsed: ParsedQuestion, query: string, queryIndex: number): SearchResult {
   const memoryTerms = extractMemoryTerms(result.memory);
   const overlap = countOverlap(parsed.expandedTerms, memoryTerms);
+  const directOverlap = countOverlap(parsed.searchTerms, memoryTerms);
   const queryTerms = query.split(/\s+/).filter(Boolean);
   const queryOverlap = countOverlap(queryTerms, memoryTerms);
-  const memoryDomains = detectDomains(memoryTerms);
 
   let score = result.score;
   score += Math.min(24, overlap * 8);
+  score += Math.min(16, directOverlap * 8);
   score += Math.min(12, queryOverlap * 4);
   score += Math.max(0, 8 - queryIndex * 2);
 
-  const sharedDomains = parsed.domains.filter(domain => memoryDomains.includes(domain));
-  score += sharedDomains.length * 14;
-
-  if (parsed.domains.length > 0 && sharedDomains.length === 0) {
-    score -= 28;
-  }
-
-  if (parsed.domains.length > 1 && sharedDomains.length < parsed.domains.length) {
-    score -= (parsed.domains.length - sharedDomains.length) * 18;
-  }
-
-  if (parsed.domains.includes('infra') && !memoryDomains.includes('infra')) {
-    score -= 18;
-  }
-  if (parsed.domains.includes('auth') && !memoryDomains.includes('auth')) {
-    score -= 18;
-  }
-
-  const strongTerms = parsed.expandedTerms.filter(term => term.length >= 5);
+  const strongTerms = parsed.searchTerms.filter(term => term.length >= 5);
   if (strongTerms.length > 0 && strongTerms.every(term => !memoryTerms.includes(term))) {
     score -= 14;
   }
@@ -365,44 +381,18 @@ function rerankResult(result: SearchResult, parsed: ParsedQuestion, query: strin
   };
 }
 
-function countSharedDomains(parsed: ParsedQuestion, result: SearchResult): number {
-  const memoryDomains = detectDomains(extractMemoryTerms(result.memory));
-  return parsed.domains.filter(domain => memoryDomains.includes(domain)).length;
-}
-
 function extractMemoryTerms(memory: SearchResult['memory']): string[] {
   const corpus = [memory.summary, memory.text, ...(memory.tags || []), ...(memory.paths || [])]
     .filter(Boolean)
-    .join(' ')
-    .toLowerCase();
+    .join(' ');
 
-  const raw = normalizeWhitespace(corpus.replace(/[^\w\s]/g, ' '))
-    .split(/\s+/)
-    .filter(token => token.length > 2);
-
-  const expanded = new Set<string>();
-  for (const token of raw) {
-    const synonyms = TOKEN_SYNONYMS[token] || [token];
-    synonyms.forEach(term => expanded.add(term));
-  }
-
-  for (const [pattern, expansions] of PHRASE_SYNONYMS) {
-    if (pattern.test(corpus)) {
-      expansions.forEach(term => expanded.add(term));
-    }
-  }
-
-  return uniquePreservingOrder([...raw, ...expanded]);
+  return uniquePreservingOrder(tokenize(corpus));
 }
 
-function detectDomains(terms: string[]): AskDomain[] {
-  const domainMatches: AskDomain[] = [];
-  for (const [domain, keywords] of Object.entries(DOMAIN_KEYWORDS) as Array<[AskDomain, string[]]>) {
-    if (keywords.some(keyword => terms.includes(keyword))) {
-      domainMatches.push(domain);
-    }
-  }
-  return domainMatches;
+function tokenize(value: string): string[] {
+  return normalizeWhitespace(value.toLowerCase().replace(/[^\w\s]/g, ' '))
+    .split(/\s+/)
+    .filter(token => token.length > 2);
 }
 
 function countOverlap(sourceTerms: string[], targetTerms: string[]): number {

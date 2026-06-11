@@ -467,3 +467,30 @@ test('git-commit capture saves the last commit once (deduped)', () => {
   assert.equal(commits[0].summary, 'Add rate limiting');
   assert.deepEqual(commits[0].paths, ['a.txt']);
 });
+
+test('ask learns vocabulary from project memories (no hardcoded synonyms)', () => {
+  const sandbox = makeSandbox();
+  const project = makeProject(sandbox.workspace, 'ask-proj');
+
+  // Domain the old hardcoded tables knew nothing about
+  const saves = [
+    ['Paywall uses RevenueCat, entitlement is checked in SubscriptionManager', 'paywall,revenuecat', '5'],
+    ['RevenueCat sandbox receipts fail on simulator, test on device', 'revenuecat,testing', '4'],
+    ['Onboarding ends with ATT prompt after the paywall', 'onboarding,att', '4'],
+    ['SwiftUI navigation uses NavigationStack with path binding', 'swiftui', '3'],
+  ];
+  for (const [text, tags, importance] of saves) {
+    parseJson(runCli(['save', text, '--tags', tags, '--importance', importance, '--json'],
+      { cwd: project, home: sandbox.home }).stdout);
+  }
+
+  const ask = parseJson(runCli(['ask', 'how does the paywall work', '--json'],
+    { cwd: project, home: sandbox.home }).stdout);
+  assert.match(ask.results[0].summary, /RevenueCat/);
+  // "revenuecat" was never in the question — learned from co-occurrence
+  assert.equal(ask.queries_tried.some(q => q.includes('revenuecat')), true);
+
+  const miss = parseJson(runCli(['ask', 'what is the kubernetes ingress config', '--json'],
+    { cwd: project, home: sandbox.home }).stdout);
+  assert.equal(miss.count, 0);
+});
