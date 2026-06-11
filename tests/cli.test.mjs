@@ -540,3 +540,23 @@ test('ask supports --global scope', () => {
     { cwd: project, home: sandbox.home }).stdout);
   assert.equal((projectAsk.results || []).some(r => /conventional/.test(r.summary)), false);
 });
+
+test('ask ranks rare terms above common words on a noisy corpus', () => {
+  const sandbox = makeSandbox();
+  const project = makeProject(sandbox.workspace, 'idf-proj');
+
+  // Noise: high-importance memories sharing the common words of the question
+  for (let i = 0; i < 6; i++) {
+    parseJson(runCli(['save', `Changed the deploy memory settings for service ${i} hooks cleanup`, '--importance', '5', '--json'],
+      { cwd: project, home: sandbox.home }).stdout);
+  }
+  const exact = parseJson(runCli(['save', 'Release 2.3.1 adds Codex lifecycle hooks support', '--tags', 'release', '--importance', '3', '--json'],
+    { cwd: project, home: sandbox.home }).stdout);
+
+  // Broad natural wording; "2.3.1" and "codex" are the rare anchors
+  const ask = parseJson(runCli(['ask', 'What changed in release 2.3.1 for Codex hooks?', '--json'],
+    { cwd: project, home: sandbox.home }).stdout);
+  assert.equal(ask.results[0].id, exact.id);
+  // Version token must survive tokenization
+  assert.equal(ask.queries_tried.some(q => q.includes('2.3.1')), true);
+});

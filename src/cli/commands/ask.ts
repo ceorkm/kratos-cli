@@ -54,7 +54,7 @@ const GENERIC_SYNONYMS: Record<string, string[]> = {
  */
 class LearnedVocabulary {
   private termDocs = new Map<string, Set<number>>();
-  private docCount = 0;
+  docCount = 0;
 
   constructor(memories: Memory[]) {
     this.docCount = memories.length;
@@ -66,7 +66,7 @@ class LearnedVocabulary {
         ...(memory.paths || []).map(p => p.split('/').pop() || ''),
       ].join(' ');
 
-      for (const token of new Set(tokenize(corpus))) {
+      for (const token of new Set(tokenize(corpus).map(singularize))) {
         if (STOP_WORDS.has(token)) continue;
         if (!this.termDocs.has(token)) this.termDocs.set(token, new Set());
         this.termDocs.get(token)!.add(idx);
@@ -74,9 +74,21 @@ class LearnedVocabulary {
     });
   }
 
+  /** Document frequency for a term (plural-folded). */
+  df(term: string): number {
+    return this.termDocs.get(singularize(term))?.size || 0;
+  }
+
+  /** Rarity weight: rare terms count for much more than ubiquitous ones. */
+  idf(term: string): number {
+    const df = this.df(term);
+    if (df === 0 || this.docCount === 0) return 0;
+    return Math.log(1 + this.docCount / df);
+  }
+
   /** Top co-occurring terms for a query term, strongest associations first. */
   expand(term: string, max = 3): string[] {
-    const docs = this.termDocs.get(term);
+    const docs = this.termDocs.get(singularize(term));
     if (!docs || docs.size === 0) return [];
 
     const scores = new Map<string, number>();
@@ -135,7 +147,7 @@ export async function askCommand(ctx: CLIContext, question: string, opts: {
   }
 
   const searchPlan = buildSearchPlan(parsed, limit);
-  const results = runAskSearch(memoryDb, parsed, searchPlan, limit);
+  const results = runAskSearch(memoryDb, parsed, searchPlan, limit, vocabulary);
 
   if (results.length === 0) {
     if (opts.json) {
@@ -239,16 +251,26 @@ function synthesizeAnswer(results: Array<{ memory: { summary: string; text: stri
     .join('\n');
 }
 
+// English phrase folds: "sign in" is authentication, not signatures. Applied
+// before tokenization so the bare verb doesn't collide with e.g. "signed commits".
+const PHRASE_FOLDS: Array<[RegExp, string]> = [
+  [/\bsign(?:s|ed|ing)?[\s-]+in(?:to)?\b/g, ' login auth '],
+  [/\blog(?:s|ged|ging)?[\s-]+in(?:to)?\b/g, ' login auth '],
+];
+
 function parseNaturalLanguageQuery(question: string, vocabulary: LearnedVocabulary): ParsedQuestion {
-  const lowerQ = question.toLowerCase();
+  let lowerQ = question.toLowerCase();
+  for (const [pattern, replacement] of PHRASE_FOLDS) {
+    lowerQ = lowerQ.replace(pattern, replacement);
+  }
   const normalizedQuestion = normalizeWhitespace(lowerQ.replace(/[^\w\s]/g, ' '));
 
   const rawTerms = normalizedQuestion
     .split(/\s+/)
     .filter(Boolean);
 
-  const words = rawTerms
-    .filter(word => word.length > 2 && !STOP_WORDS.has(word));
+  const words = tokenize(lowerQ)
+    .filter(word => !STOP_WORDS.has(word));
 
   // Expand each term: generic English synonyms + vocabulary learned from
   // this project's own memories
@@ -301,13 +323,13 @@ function buildSearchPlan(parsed: ParsedQuestion, limit: number): string[] {
   ).slice(0, 8);
 }
 
-function runAskSearch(memoryDb: MemoryDatabase, parsed: ParsedQuestion, queries: string[], limit: number): SearchResult[] {
+function runAskSearch(memoryDb: MemoryDatabase, parsed: ParsedQuestion, queries: string[], limit: number, vocabulary: LearnedVocabulary): SearchResult[] {
   const merged = new Map<string, SearchResult>();
 
   queries.forEach((query, index) => {
     const results = memoryDb.search({ q: query, k: Math.max(limit * 2, 6) });
     for (const result of results) {
-      const reranked = rerankResult(result, parsed, query, index);
+      const reranked = rerankResult(result, parsed, query, index, vocabulary);
       if (reranked.score < 45) {
         continue;
       }
@@ -332,13 +354,23 @@ function runAskSearch(memoryDb: MemoryDatabase, parsed: ParsedQuestion, queries:
   // positives like "what machine do I ssh to for billing" matching pure-ssh notes.
   let gated = ranked;
   if (parsed.searchTerms.length >= 3) {
-    gated = ranked.filter(result => {
-      const memoryTerms = new Set(extractMemoryTerms(result.memory).map(singularize));
-      return parsed.searchTerms.every(term => {
-        const candidates = parsed.termExpansions.get(term) || [term];
-        return candidates.some(candidate => memoryTerms.has(singularize(candidate)));
-      });
+    // Anchor terms are the rare, information-carrying words of the question
+    // (they exist in the corpus but in few memories). A result must cover
+    // every anchor; common words and words absent from the corpus are forgiven.
+    const anchorCap = Math.max(2, Math.ceil(vocabulary.docCount * 0.2));
+    const anchors = parsed.searchTerms.filter(term => {
+      const df = vocabulary.df(term);
+      return df > 0 && df <= anchorCap;
     });
+    if (anchors.length > 0) {
+      gated = ranked.filter(result => {
+        const memoryTerms = new Set(extractMemoryTerms(result.memory).map(singularize));
+        return anchors.every(term => {
+          const candidates = parsed.termExpansions.get(term) || [term];
+          return candidates.some(candidate => memoryTerms.has(singularize(candidate)));
+        });
+      });
+    }
   }
 
   const strictTerms = parsed.searchTerms.filter(term => STRICT_QUERY_TERMS.has(term));
@@ -352,30 +384,52 @@ function runAskSearch(memoryDb: MemoryDatabase, parsed: ParsedQuestion, queries:
   return gated;
 }
 
-/** Naive plural folding so "machines" covers "machine", "boxes" covers "box". */
+/**
+ * Light stemming so "sign" matches "signed"/"signing" and "machines" matches
+ * "machine". Both sides are folded identically, so internal consistency
+ * matters more than linguistic perfection.
+ */
 function singularize(term: string): string {
-  if (term.length > 4 && term.endsWith('es')) return term.slice(0, -2);
-  if (term.length > 3 && term.endsWith('s')) return term.slice(0, -1);
-  return term;
+  let t = term;
+  if (t.length > 5 && t.endsWith('ing')) t = t.slice(0, -3);
+  else if (t.length > 5 && t.endsWith('ed')) t = t.slice(0, -2);
+  if (t.length > 4 && t.endsWith('es')) return t.slice(0, -2);
+  if (t.length > 3 && t.endsWith('s')) return t.slice(0, -1);
+  return t;
 }
 
-function rerankResult(result: SearchResult, parsed: ParsedQuestion, query: string, queryIndex: number): SearchResult {
-  const memoryTerms = extractMemoryTerms(result.memory);
-  const overlap = countOverlap(parsed.expandedTerms, memoryTerms);
-  const directOverlap = countOverlap(parsed.searchTerms, memoryTerms);
-  const queryTerms = query.split(/\s+/).filter(Boolean);
-  const queryOverlap = countOverlap(queryTerms, memoryTerms);
+function rerankResult(result: SearchResult, parsed: ParsedQuestion, query: string, queryIndex: number, vocabulary: LearnedVocabulary): SearchResult {
+  const memoryTerms = new Set(extractMemoryTerms(result.memory).map(singularize));
 
-  let score = result.score;
-  score += Math.min(24, overlap * 8);
-  score += Math.min(16, directOverlap * 8);
-  score += Math.min(12, queryOverlap * 4);
-  score += Math.max(0, 8 - queryIndex * 2);
-
-  const strongTerms = parsed.searchTerms.filter(term => term.length >= 5);
-  if (strongTerms.length > 0 && strongTerms.every(term => !memoryTerms.includes(term))) {
-    score -= 14;
+  // IDF-weighted coverage of the full question: rare terms dominate, common
+  // words ("memory", "changed") barely count. Terms absent from the corpus
+  // get a neutral weight so questions in unseen vocabulary still rank.
+  let totalWeight = 0;
+  let matchedWeight = 0;
+  for (const term of parsed.searchTerms) {
+    const weight = vocabulary.df(term) > 0 ? vocabulary.idf(term) : 1;
+    totalWeight += weight;
+    if (memoryTerms.has(singularize(term))) {
+      // Direct hit: full rarity-weighted credit
+      matchedWeight += weight;
+    } else {
+      // Expansion-only hit: capped credit — co-occurrence guesses must not
+      // satisfy rare anchor terms cheaply
+      const candidates = parsed.termExpansions.get(term) || [term];
+      if (candidates.some(candidate => memoryTerms.has(singularize(candidate)))) {
+        matchedWeight += Math.min(weight, 1);
+      }
+    }
   }
+  const coverage = totalWeight > 0 ? matchedWeight / totalWeight : 0;
+
+  const expandedOverlap = parsed.expandedTerms
+    .filter(term => memoryTerms.has(singularize(term))).length;
+
+  let score = 58 * coverage;
+  score += Math.min(12, expandedOverlap * 3);
+  score += result.score * 0.22;
+  score += Math.max(0, 6 - queryIndex * 2);
 
   return {
     ...result,
@@ -392,9 +446,13 @@ function extractMemoryTerms(memory: SearchResult['memory']): string[] {
 }
 
 function tokenize(value: string): string[] {
-  return normalizeWhitespace(value.toLowerCase().replace(/[^\w\s]/g, ' '))
+  const base = normalizeWhitespace(value.toLowerCase().replace(/[^\w\s]/g, ' '))
     .split(/\s+/)
     .filter(token => token.length > 2);
+  // Keep dotted version tokens ("1.8.0") that the split above destroys
+  const versions = (value.toLowerCase().match(/\d+(?:\.\d+)+/g) || [])
+    .filter(token => token.length > 2);
+  return [...base, ...versions];
 }
 
 function countOverlap(sourceTerms: string[], targetTerms: string[]): number {
