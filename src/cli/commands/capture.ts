@@ -28,6 +28,9 @@ export async function captureCommand(ctx: CLIContext, opts: {
     case 'session-end':
       await handler.handleSessionEnd(inputData);
       break;
+    case 'git-commit':
+      await handler.handleGitCommit(inputData);
+      break;
     default:
       // Unknown event type — ignore silently (hooks should not produce errors)
       break;

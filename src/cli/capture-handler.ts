@@ -87,6 +87,47 @@ export class CaptureHandler {
     });
   }
 
+  /**
+   * Invoked by the git post-commit hook. Reads the last commit directly from
+   * git — no payload needed, so the shell hook stays a one-liner.
+   */
+  async handleGitCommit(_data: any): Promise<void> {
+    const { execSync } = await import('node:child_process');
+    const git = (args: string) => {
+      try {
+        return execSync(`git ${args}`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      } catch {
+        return '';
+      }
+    };
+
+    const subject = git('log -1 --pretty=%s');
+    if (!subject) return;
+
+    const body = git('log -1 --pretty=%b');
+    const files = git('log -1 --name-only --pretty=format:')
+      .split('\n')
+      .map(f => f.trim())
+      .filter(Boolean)
+      .slice(0, 50);
+
+    let text = `Commit: ${subject}`;
+    if (body) text += `\n\n${body}`;
+    if (files.length > 0) text += `\n\nFiles:\n${files.map(f => `  - ${f}`).join('\n')}`;
+
+    const piiDetector = await this.ctx.getPIIDetector();
+    const summaryScan = piiDetector.detect(subject);
+    const textScan = piiDetector.detect(text);
+
+    this.ctx.memoryDb.save({
+      summary: summaryScan.hasPII || summaryScan.hasSecrets ? summaryScan.redactedText : subject,
+      text: textScan.hasPII || textScan.hasSecrets ? textScan.redactedText : text,
+      tags: ['git-commit'],
+      paths: files,
+      importance: 3,
+    });
+  }
+
   async handleSessionEnd(_data: any): Promise<void> {
     const buffer = await this.loadBuffer();
     if (!buffer || buffer.events.length === 0) return;

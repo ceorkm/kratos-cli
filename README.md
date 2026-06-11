@@ -59,7 +59,9 @@ That's it. No global install needed. Auto-detects your project.
 | `npx kratos-memory status` | System dashboard (`--json`) |
 | `npx kratos-memory switch <path>` | Switch project (`--json`) |
 | `npx kratos-memory scan <text>` | Detect PII and secrets (`--redact`, `--json`) |
-| `npx kratos-memory hooks install` | Install auto-capture hooks |
+| `npx kratos-memory context` | Compact memory block for session injection (`--budget`, `--json`) |
+| `npx kratos-memory summary` | Project report: decisions, topics, most-touched files, prune candidates |
+| `npx kratos-memory hooks install` | Install hooks: memory injection, auto-capture, git commit capture |
 
 Kratos also supports machine-readable output for automation-heavy workflows. Use `--json` on the core read/write commands when you want agents, scripts, or CI to parse results safely.
 
@@ -73,9 +75,19 @@ Or drop the included `AGENTS.md` file in your project root — any agent that re
 
 ### Claude Code
 
+One command, fully automatic:
+
+```bash
+npx kratos-memory hooks install
 ```
-> use npx kratos-memory CLI (run help first)
-```
+
+This wires three hooks into the project:
+
+- **SessionStart** — `kratos context` injects pinned memories, decisions, and recent work into every new session. The agent starts already knowing the project.
+- **PostToolUse / Stop** — file edits and a session summary are captured automatically.
+- **git post-commit** — every commit is saved as a memory (message + changed files).
+
+No prompting, no relying on the model to remember to check memory — the hooks enforce it.
 
 ### Codex
 
@@ -141,7 +153,17 @@ Each project is completely isolated with its own database.
 
 ## Coming from Kratos MCP?
 
-This is the successor to [`kratos-mcp`](https://github.com/ceorkm/kratos-mcp). We moved from MCP to CLI because MCP eats too many tokens per tool call (JSON-RPC schema overhead on every interaction). The CLI is lighter, faster, and works with any agent — not just MCP-compatible ones.
+This is the successor to [`kratos-mcp`](https://github.com/ceorkm/kratos-mcp). We moved from MCP to CLI because MCP eats tokens before you ever use it. The CLI is lighter, faster, and works with any agent — not just MCP-compatible ones.
+
+**The actual numbers** (measured on Claude Code):
+
+| | MCP server | CLI |
+|---|---|---|
+| Tool schemas loaded into every session | **1,538 tokens** (12 tools) | **0 tokens** |
+| Cost before the first memory is read | 1,538 tokens | 0 tokens |
+| Invocation | JSON-RPC tool call | one Bash command (~30 tokens) |
+
+The MCP version pays ~1.5k tokens of schema overhead in *every session of every project*, even sessions that never touch memory. At 20 agent sessions a day that's ~31k tokens/day of pure overhead. The CLI pays nothing until the moment it's actually used — and the responses are the same JSON either way.
 
 **Your data is already compatible.** Both versions use the same `~/.kratos/` storage and SQLite format. Just start using `npx kratos-memory` and your existing memories are there.
 

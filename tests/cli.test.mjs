@@ -345,3 +345,125 @@ test('search boosts strong fields, rewards concept coverage, and exposes explain
   assert.equal(coverageSearch.results[0].concept_coverage >= 0.66, true);
   assert.equal(coverageSearch.results[0].matched_fields.includes('tags') || coverageSearch.results[0].matched_fields.includes('summary'), true);
 });
+
+test('context command emits budgeted sections and stays silent when empty', () => {
+  const sandbox = makeSandbox();
+  const project = makeProject(sandbox.workspace, 'context-proj');
+
+  const empty = runCli(['context'], { cwd: project, home: sandbox.home });
+  assert.equal(empty.stdout.trim(), '');
+
+  parseJson(runCli([
+    'save', 'Auth uses JWT with refresh tokens',
+    '--tags', 'auth', '--importance', '5', '--json',
+  ], { cwd: project, home: sandbox.home }).stdout);
+
+  const pinned = parseJson(runCli([
+    'save', 'Never change the project id hashing',
+    '--tags', 'critical', '--importance', '5', '--json',
+  ], { cwd: project, home: sandbox.home }).stdout);
+  runCli(['pin', pinned.id], { cwd: project, home: sandbox.home });
+
+  const out = runCli(['context'], { cwd: project, home: sandbox.home }).stdout;
+  assert.match(out, /# Kratos memory/);
+  assert.match(out, /## Pinned/);
+  assert.match(out, /Never change the project id hashing/);
+  assert.match(out, /## Decisions & fixes/);
+  assert.match(out, /Auth uses JWT/);
+
+  const json = parseJson(runCli(['context', '--json'], { cwd: project, home: sandbox.home }).stdout);
+  assert.equal(json.sections.pinned.length, 1);
+  assert.equal(json.sections.important.length >= 1, true);
+});
+
+test('hooks install writes valid Claude Code schema and migrates legacy entries', () => {
+  const sandbox = makeSandbox();
+  const project = makeProject(sandbox.workspace, 'hooks-proj');
+
+  const claudeDir = path.join(project, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, 'settings.local.json'), JSON.stringify({
+    hooks: {
+      PostToolUse: [
+        { matcher: 'Edit|Write|MultiEdit', command: 'kratos capture --event post-tool-use' },
+        { matcher: 'Bash', hooks: [{ type: 'command', command: 'echo user-hook' }] },
+      ],
+    },
+  }, null, 2));
+
+  const install = runCli(['hooks', 'install'], { cwd: project, home: sandbox.home });
+  assert.match(install.stdout, /Migrated 1 legacy/);
+
+  const settings = JSON.parse(fs.readFileSync(path.join(claudeDir, 'settings.local.json'), 'utf8'));
+
+  // SessionStart injection installed
+  assert.equal(settings.hooks.SessionStart[0].hooks[0].command, 'kratos context');
+  // Every kratos entry uses the nested hooks schema Claude Code requires
+  for (const event of ['SessionStart', 'PostToolUse', 'Stop']) {
+    for (const entry of settings.hooks[event]) {
+      assert.equal(Array.isArray(entry.hooks), true, `${event} entry missing nested hooks array`);
+    }
+  }
+  // User's own hook untouched
+  const userHook = settings.hooks.PostToolUse.find(e =>
+    e.hooks?.some(h => h.command === 'echo user-hook'));
+  assert.notEqual(userHook, undefined);
+
+  const uninstall = runCli(['hooks', 'uninstall'], { cwd: project, home: sandbox.home });
+  assert.match(uninstall.stdout, /removed/);
+  const after = JSON.parse(fs.readFileSync(path.join(claudeDir, 'settings.local.json'), 'utf8'));
+  assert.equal(after.hooks.SessionStart, undefined);
+  assert.notEqual(after.hooks.PostToolUse.find(e =>
+    e.hooks?.some(h => h.command === 'echo user-hook')), undefined);
+});
+
+test('search re-ranks beyond the bm25 cut and respects the limit', () => {
+  const sandbox = makeSandbox();
+  const project = makeProject(sandbox.workspace, 'rank-proj');
+
+  // The winner: exact tag match + importance 5, single mention in the body —
+  // weak by bm25 term frequency, strongest under the JS re-ranker.
+  const winner = parseJson(runCli([
+    'save', 'Production deploy checklist for the release pipeline',
+    '--tags', 'deploy', '--importance', '5', '--json',
+  ], { cwd: project, home: sandbox.home }).stdout);
+
+  // 30 high term-frequency fillers that bm25 ranks above a single mention
+  for (let i = 0; i < 30; i++) {
+    parseJson(runCli([
+      'save', `deploy deploy deploy scratch note ${i} about deploy deploy retries`,
+      '--importance', '1', '--json',
+    ], { cwd: project, home: sandbox.home }).stdout);
+  }
+
+  const search = parseJson(runCli(['search', 'deploy', '--limit', '10', '--json'], {
+    cwd: project,
+    home: sandbox.home,
+  }).stdout);
+
+  assert.equal(search.results.length, 10);
+  assert.equal(search.results[0].id, winner.id);
+});
+
+test('git-commit capture saves the last commit once (deduped)', () => {
+  const sandbox = makeSandbox();
+  const project = makeProject(sandbox.workspace, 'git-proj');
+  const sh = (cmd) => spawnSync('sh', ['-c', cmd], {
+    cwd: project,
+    encoding: 'utf8',
+    env: { ...process.env, HOME: sandbox.home, USERPROFILE: sandbox.home },
+  });
+
+  sh('git init -q . && git config user.email t@t.co && git config user.name T');
+  fs.writeFileSync(path.join(project, 'a.txt'), 'hi');
+  sh('git add a.txt && git commit -qm "Add rate limiting"');
+
+  runCli(['capture', '--event', 'git-commit'], { cwd: project, home: sandbox.home });
+  runCli(['capture', '--event', 'git-commit'], { cwd: project, home: sandbox.home });
+
+  const recent = parseJson(runCli(['recent', '--json'], { cwd: project, home: sandbox.home }).stdout);
+  const commits = recent.memories.filter(m => m.tags.includes('git-commit'));
+  assert.equal(commits.length, 1);
+  assert.equal(commits[0].summary, 'Add rate limiting');
+  assert.deepEqual(commits[0].paths, ['a.txt']);
+});

@@ -2,21 +2,38 @@ import { Output } from '../output.js';
 import path from 'path';
 import fs from 'fs-extra';
 
-const HOOK_CONFIG = {
-  hooks: {
-    PostToolUse: [
-      {
-        matcher: 'Edit|Write|MultiEdit',
-        command: 'kratos capture --event post-tool-use',
-      },
-    ],
-    Stop: [
-      {
-        command: 'kratos capture --event session-end',
-      },
-    ],
-  },
+// Claude Code hook schema: each event holds matcher groups, each group holds
+// hooks of { type: 'command', command }. Flat { matcher, command } entries
+// (written by kratos <= 1.6.x) are silently ignored by Claude Code — install
+// migrates them to this format.
+const KRATOS_HOOKS: Record<string, any[]> = {
+  SessionStart: [
+    {
+      hooks: [{ type: 'command', command: 'kratos context' }],
+    },
+  ],
+  PostToolUse: [
+    {
+      matcher: 'Edit|Write|MultiEdit',
+      hooks: [{ type: 'command', command: 'kratos capture --event post-tool-use' }],
+    },
+  ],
+  Stop: [
+    {
+      hooks: [{ type: 'command', command: 'kratos capture --event session-end' }],
+    },
+  ],
 };
+
+const HOOK_EVENTS = Object.keys(KRATOS_HOOKS);
+
+const GIT_HOOK_START = '# >>> kratos-memory post-commit >>>';
+const GIT_HOOK_END = '# <<< kratos-memory post-commit <<<';
+const GIT_HOOK_BLOCK = [
+  GIT_HOOK_START,
+  'command -v kratos >/dev/null 2>&1 && kratos capture --event git-commit >/dev/null 2>&1 || true',
+  GIT_HOOK_END,
+].join('\n');
 
 export async function hooksCommand(action: string): Promise<void> {
   switch (action) {
@@ -35,15 +52,29 @@ export async function hooksCommand(action: string): Promise<void> {
   }
 }
 
-async function installHooks(): Promise<void> {
-  const settingsPath = path.join(process.cwd(), '.claude', 'settings.local.json');
-  const settingsDir = path.dirname(settingsPath);
+/** Matches both current-format and legacy flat-format kratos entries. */
+function isKratosEntry(entry: any): boolean {
+  if (typeof entry?.command === 'string' && entry.command.includes('kratos ')) return true;
+  if (Array.isArray(entry?.hooks)) {
+    return entry.hooks.some((h: any) => typeof h?.command === 'string' && h.command.includes('kratos '));
+  }
+  return false;
+}
 
-  await fs.ensureDir(settingsDir);
+/** Legacy flat entries ({ matcher, command }) that Claude Code never executed. */
+function isLegacyEntry(entry: any): boolean {
+  return typeof entry?.command === 'string' && !Array.isArray(entry?.hooks);
+}
+
+function settingsFilePath(): string {
+  return path.join(process.cwd(), '.claude', 'settings.local.json');
+}
+
+async function installHooks(): Promise<void> {
+  const settingsPath = settingsFilePath();
+  await fs.ensureDir(path.dirname(settingsPath));
 
   let settings: any = {};
-
-  // Load existing settings if present
   if (await fs.pathExists(settingsPath)) {
     try {
       settings = await fs.readJson(settingsPath);
@@ -52,41 +83,82 @@ async function installHooks(): Promise<void> {
     }
   }
 
-  // Check if hooks already installed
-  if (settings.hooks?.PostToolUse || settings.hooks?.Stop) {
-    // Check if our hooks are already there
-    const existingPostTool = settings.hooks.PostToolUse || [];
-    const hasKratosHook = existingPostTool.some(
-      (h: any) => h.command?.includes('kratos capture')
-    );
-
-    if (hasKratosHook) {
-      Output.warn('Kratos auto-capture hooks are already installed');
-      return;
-    }
-  }
-
-  // Merge hooks into existing settings (don't overwrite other hooks)
   if (!settings.hooks) settings.hooks = {};
 
-  // Add PostToolUse hooks
-  if (!settings.hooks.PostToolUse) settings.hooks.PostToolUse = [];
-  settings.hooks.PostToolUse.push(...HOOK_CONFIG.hooks.PostToolUse);
-
-  // Add Stop hooks
-  if (!settings.hooks.Stop) settings.hooks.Stop = [];
-  settings.hooks.Stop.push(...HOOK_CONFIG.hooks.Stop);
+  let migrated = 0;
+  for (const event of HOOK_EVENTS) {
+    const existing: any[] = settings.hooks[event] || [];
+    migrated += existing.filter((e) => isKratosEntry(e) && isLegacyEntry(e)).length;
+    // Drop any prior kratos entries (legacy or current), keep everything else
+    const others = existing.filter((e) => !isKratosEntry(e));
+    settings.hooks[event] = [...others, ...KRATOS_HOOKS[event]];
+  }
 
   await fs.writeJson(settingsPath, settings, { spaces: 2 });
 
-  Output.success('Auto-capture hooks installed!');
+  Output.success('Kratos hooks installed');
+  if (migrated > 0) {
+    Output.warn(`Migrated ${migrated} legacy hook entr${migrated === 1 ? 'y' : 'ies'} that Claude Code was ignoring`);
+  }
   Output.dim(`Config written to: ${settingsPath}`);
-  Output.dim('Hooks will capture: file edits (Edit/Write/MultiEdit) and session summaries');
-  Output.dim('Captured memories are auto-compressed and project-isolated');
+  Output.dim('SessionStart: injects project memory into every session (kratos context)');
+  Output.dim('PostToolUse:  captures file edits (Edit/Write/MultiEdit)');
+  Output.dim('Stop:         saves a session summary');
+
+  await installGitHook();
+}
+
+async function installGitHook(): Promise<void> {
+  const hooksDir = path.join(process.cwd(), '.git', 'hooks');
+  if (!await fs.pathExists(path.join(process.cwd(), '.git'))) {
+    Output.dim('No .git directory — skipped git post-commit capture');
+    return;
+  }
+
+  await fs.ensureDir(hooksDir);
+  const hookPath = path.join(hooksDir, 'post-commit');
+
+  if (await fs.pathExists(hookPath)) {
+    const existing = await fs.readFile(hookPath, 'utf8');
+    if (existing.includes(GIT_HOOK_START)) {
+      Output.dim('Git post-commit capture already installed');
+      return;
+    }
+    // Preserve the user's existing hook — append our block
+    await fs.writeFile(hookPath, existing.trimEnd() + '\n\n' + GIT_HOOK_BLOCK + '\n');
+  } else {
+    await fs.writeFile(hookPath, '#!/bin/sh\n' + GIT_HOOK_BLOCK + '\n');
+  }
+  await fs.chmod(hookPath, 0o755);
+  Output.dim('Git:          post-commit saves each commit as a memory');
+}
+
+async function uninstallGitHook(): Promise<void> {
+  const hookPath = path.join(process.cwd(), '.git', 'hooks', 'post-commit');
+  if (!await fs.pathExists(hookPath)) return;
+
+  const existing = await fs.readFile(hookPath, 'utf8');
+  if (!existing.includes(GIT_HOOK_START)) return;
+
+  const startIdx = existing.indexOf(GIT_HOOK_START);
+  const endIdx = existing.indexOf(GIT_HOOK_END);
+  if (endIdx === -1) return;
+
+  const cleaned = (existing.slice(0, startIdx) + existing.slice(endIdx + GIT_HOOK_END.length))
+    .replace(/\n{3,}/g, '\n\n')
+    .trimEnd();
+
+  // Nothing left but the shebang — remove the file entirely
+  if (cleaned.replace(/^#!.*$/m, '').trim() === '') {
+    await fs.remove(hookPath);
+  } else {
+    await fs.writeFile(hookPath, cleaned + '\n');
+  }
+  Output.dim('Git post-commit capture removed');
 }
 
 async function uninstallHooks(): Promise<void> {
-  const settingsPath = path.join(process.cwd(), '.claude', 'settings.local.json');
+  const settingsPath = settingsFilePath();
 
   if (!await fs.pathExists(settingsPath)) {
     Output.warn('No hooks configuration found');
@@ -101,41 +173,30 @@ async function uninstallHooks(): Promise<void> {
       return;
     }
 
-    // Remove only kratos hooks
-    if (settings.hooks.PostToolUse) {
-      settings.hooks.PostToolUse = settings.hooks.PostToolUse.filter(
-        (h: any) => !h.command?.includes('kratos capture')
-      );
-      if (settings.hooks.PostToolUse.length === 0) {
-        delete settings.hooks.PostToolUse;
+    for (const event of Object.keys(settings.hooks)) {
+      settings.hooks[event] = (settings.hooks[event] || []).filter((e: any) => !isKratosEntry(e));
+      if (settings.hooks[event].length === 0) {
+        delete settings.hooks[event];
       }
     }
 
-    if (settings.hooks.Stop) {
-      settings.hooks.Stop = settings.hooks.Stop.filter(
-        (h: any) => !h.command?.includes('kratos capture')
-      );
-      if (settings.hooks.Stop.length === 0) {
-        delete settings.hooks.Stop;
-      }
-    }
-
-    // Clean up empty hooks object
     if (Object.keys(settings.hooks).length === 0) {
       delete settings.hooks;
     }
 
     await fs.writeJson(settingsPath, settings, { spaces: 2 });
 
-    Output.success('Kratos auto-capture hooks removed');
+    Output.success('Kratos hooks removed');
   } catch {
     Output.error('Failed to read settings file');
     process.exit(1);
   }
+
+  await uninstallGitHook();
 }
 
 async function checkHooksStatus(): Promise<void> {
-  const settingsPath = path.join(process.cwd(), '.claude', 'settings.local.json');
+  const settingsPath = settingsFilePath();
 
   if (!await fs.pathExists(settingsPath)) {
     Output.info('No hooks installed (no settings file found)');
@@ -144,19 +205,42 @@ async function checkHooksStatus(): Promise<void> {
 
   try {
     const settings = await fs.readJson(settingsPath);
-    const postToolHooks = (settings.hooks?.PostToolUse || []).filter(
-      (h: any) => h.command?.includes('kratos capture')
-    );
-    const stopHooks = (settings.hooks?.Stop || []).filter(
-      (h: any) => h.command?.includes('kratos capture')
-    );
+    let installed = 0;
+    let legacy = 0;
 
-    if (postToolHooks.length === 0 && stopHooks.length === 0) {
+    for (const event of HOOK_EVENTS) {
+      const entries: any[] = settings.hooks?.[event] || [];
+      for (const entry of entries) {
+        if (!isKratosEntry(entry)) continue;
+        if (isLegacyEntry(entry)) legacy++;
+        else installed++;
+      }
+    }
+
+    if (installed === 0 && legacy === 0) {
       Output.info('Kratos hooks are NOT installed');
-    } else {
-      Output.success('Kratos hooks are installed');
-      Output.dim(`PostToolUse hooks: ${postToolHooks.length}`);
-      Output.dim(`Stop hooks: ${stopHooks.length}`);
+      return;
+    }
+
+    if (legacy > 0) {
+      Output.warn(`${legacy} kratos hook entr${legacy === 1 ? 'y is' : 'ies are'} in a legacy format Claude Code ignores — run: kratos hooks install`);
+    }
+    if (installed > 0) {
+      Output.success(`Kratos hooks are installed (${installed} active entr${installed === 1 ? 'y' : 'ies'})`);
+      for (const event of HOOK_EVENTS) {
+        const count = (settings.hooks?.[event] || []).filter(
+          (e: any) => isKratosEntry(e) && !isLegacyEntry(e)
+        ).length;
+        if (count > 0) Output.dim(`${event}: ${count}`);
+      }
+    }
+
+    const gitHookPath = path.join(process.cwd(), '.git', 'hooks', 'post-commit');
+    if (await fs.pathExists(gitHookPath)) {
+      const content = await fs.readFile(gitHookPath, 'utf8');
+      if (content.includes(GIT_HOOK_START)) {
+        Output.dim('Git post-commit: installed');
+      }
     }
   } catch {
     Output.error('Failed to read settings file');

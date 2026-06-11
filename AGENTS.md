@@ -3,6 +3,7 @@
 This project uses Kratos CLI for persistent memory across coding sessions.
 
 ## Commands
+- Context: `npx kratos-cli context` — compact memory block (pinned + decisions + recent)
 - Save: `npx kratos-cli save "description" --tags tag1,tag2 --importance 3`
 - Search: `npx kratos-cli search "query"`
 - Ask: `npx kratos-cli ask "question about the project"`
@@ -11,6 +12,9 @@ This project uses Kratos CLI for persistent memory across coding sessions.
 - Get: `npx kratos-cli get <memory-id>`
 - Forget: `npx kratos-cli forget <memory-id>`
 - Scan: `npx kratos-cli scan "text to check" --redact`
+
+## Setup (once per project)
+Run `npx kratos-cli hooks install` — installs session memory injection, auto-capture, and git commit capture for Claude Code.
 
 ## When to save
 - Architecture decisions

@@ -78,6 +78,18 @@ program
     await askCommand(ctx, question, opts);
   });
 
+// ─── context ────────────────────────────────────────────
+program
+  .command('context')
+  .description('Output a compact memory context block (used by SessionStart hooks)')
+  .option('-b, --budget <tokens>', 'Token budget (default: 2000)')
+  .option('-j, --json', 'Output JSON')
+  .action(async (opts) => {
+    const ctx = await initCLIContext();
+    const { contextCommand } = await import('./commands/context.js');
+    await contextCommand(ctx, opts);
+  });
+
 // ─── recent ─────────────────────────────────────────────
 program
   .command('recent')

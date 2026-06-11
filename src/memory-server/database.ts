@@ -74,18 +74,13 @@ export class MemoryDatabase {
       fs.mkdirSync(dbDir, { recursive: true });
     }
 
-    const isNew = !fs.existsSync(dbPath);
     this.db = new Database(dbPath);
     this.db.pragma('journal_mode = WAL');
 
     this.db.pragma('foreign_keys = ON');
 
     // Keep schema and FTS triggers healthy for both new and existing databases.
-    if (isNew) {
-      this.initializeSchema();
-    } else {
-      this.ensureSchema();
-    }
+    this.ensureSchema();
     // No setInterval — CLI commands are one-shot
   }
 
@@ -97,33 +92,6 @@ export class MemoryDatabase {
     if (this.db.open) {
       this.db.close();
     }
-  }
-
-  private initializeSchema() {
-    // Main memories table
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS memories (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        summary TEXT NOT NULL,
-        text TEXT NOT NULL,
-        tags TEXT DEFAULT '[]',
-        paths TEXT DEFAULT '[]',
-        importance INTEGER DEFAULT 3 CHECK(importance >= 1 AND importance <= 5),
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        ttl INTEGER,
-        expires_at INTEGER,
-        dedupe_hash TEXT
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_mem_project ON memories(project_id);
-      CREATE INDEX IF NOT EXISTS idx_mem_expires ON memories(expires_at) WHERE expires_at IS NOT NULL;
-      CREATE INDEX IF NOT EXISTS idx_mem_importance ON memories(importance DESC, created_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_mem_dedupe ON memories(dedupe_hash);
-    `);
-
-    this.ensureFTSInfrastructure();
   }
 
   private ensureSchema() {
@@ -513,6 +481,10 @@ export class MemoryDatabase {
   }): SearchResult[] {
     const k = params.k || 10;
     const now = Date.now();
+    // bm25 ordering and the JS re-scoring below disagree, so over-fetch
+    // candidates: with LIMIT k the SQL cut can drop the true best match
+    // before re-ranking ever sees it.
+    const candidateLimit = Math.max(k * 5, 50);
 
     // Build FTS query
     let query = `
@@ -558,7 +530,7 @@ export class MemoryDatabase {
     // Pinned memories (__pinned tag) surface first
     // bm25() returns negative values where closer to 0 = better match, so sort ASC
     query += ` ORDER BY (CASE WHEN m.tags LIKE '%__pinned%' THEN 0 ELSE 1 END), fts_score ASC, m.importance DESC, m.created_at DESC LIMIT ?`;
-    queryParams.push(k);
+    queryParams.push(candidateLimit);
 
     const stmt = this.db.prepare(query);
     const results = stmt.all(...queryParams) as any[];
@@ -629,8 +601,11 @@ export class MemoryDatabase {
       const importanceBoost = (memory.importance - 1) / 4 * 0.12;
       const coverageBoost = conceptCoverage * 0.32;
       const baseFtsSignal = Math.min(0.28, Math.max(0, (-1 * Number(row.fts_score || 0)) * 0.04));
+      // Recency decay (30-day half-life, max 0.06) — fresh memories win ties
+      const ageDays = Math.max(0, (now - memory.created_at) / 86_400_000);
+      const recencyBoost = 0.06 * Math.pow(0.5, ageDays / 30);
 
-      const score = Math.min(1, coverageBoost + fieldBoost + importanceBoost + baseFtsSignal);
+      const score = Math.min(1, coverageBoost + fieldBoost + importanceBoost + baseFtsSignal + recencyBoost);
 
       return {
         memory,
@@ -651,7 +626,7 @@ export class MemoryDatabase {
       if (b.score !== a.score) return b.score - a.score;
       if (b.memory.importance !== a.memory.importance) return b.memory.importance - a.memory.importance;
       return b.memory.created_at - a.memory.created_at;
-    });
+    }).slice(0, k);
   }
 
   private normalizeSearchTerms(query: string): string[] {
