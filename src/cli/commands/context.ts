@@ -112,9 +112,12 @@ export async function contextCommand(ctx: CLIContext, opts: {
 function formatEntry(entry: ContextEntry): string {
   const m = entry.memory;
   const scopeTag = entry.scope === 'global' ? ' [global]' : '';
-  const body = m.text && m.text !== m.summary
-    ? `${m.summary}: ${truncate(m.text, 200)}`
-    : truncate(m.summary, 200);
+  let body: string;
+  if (m.text && m.text !== m.summary && !m.text.startsWith(m.summary)) {
+    body = `${m.summary}: ${truncate(m.text, 200)}`;
+  } else {
+    body = truncate(m.text || m.summary, 240);
+  }
   return `- ${body}${scopeTag} (${relativeTime(m.created_at)})`;
 }
 
