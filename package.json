@@ -1,16 +1,16 @@
 {
   "name": "kratos-memory",
   "version": "1.8.1",
-  "description": "Persistent memory for AI coding agents \u2014 CLI-first, local, zero network calls",
+  "description": "Persistent memory for AI coding agents — CLI-first, local, zero network calls",
   "main": "dist/cli/index.js",
   "type": "module",
   "bin": {
-    "kratos-memory": "./bin/kratos-cli",
-    "kratos": "./bin/kratos-cli"
+    "kratos-memory": "bin/kratos-cli",
+    "kratos": "bin/kratos-cli"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/ceorkm/kratos-cli.git"
+    "url": "git+https://github.com/ceorkm/kratos-cli.git"
   },
   "scripts": {
     "build": "tsc",
