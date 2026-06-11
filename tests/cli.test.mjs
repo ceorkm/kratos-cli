@@ -520,3 +520,23 @@ test('hooks install writes Codex hooks.json and uninstall preserves user entries
   assert.notEqual(after.hooks.PreToolUse.find(e =>
     e.hooks?.some(h => h.command === 'echo user-codex-hook')), undefined);
 });
+
+test('ask supports --global scope', () => {
+  const sandbox = makeSandbox();
+  const project = makeProject(sandbox.workspace, 'ask-global-proj');
+
+  parseJson(runCli(['save', 'Always use conventional commits everywhere', '--tags', 'rules', '--importance', '5', '--global', '--json'],
+    { cwd: project, home: sandbox.home }).stdout);
+  parseJson(runCli(['save', 'This project uses tabs not spaces', '--tags', 'style', '--json'],
+    { cwd: project, home: sandbox.home }).stdout);
+
+  const globalAsk = parseJson(runCli(['ask', 'what are the commit rules', '--global', '--json'],
+    { cwd: project, home: sandbox.home }).stdout);
+  assert.equal(globalAsk.count >= 1, true);
+  assert.match(globalAsk.results[0].summary, /conventional commits/);
+
+  // Project scope must NOT see the global memory
+  const projectAsk = parseJson(runCli(['ask', 'what are the commit rules', '--json'],
+    { cwd: project, home: sandbox.home }).stdout);
+  assert.equal((projectAsk.results || []).some(r => /conventional/.test(r.summary)), false);
+});

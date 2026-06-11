@@ -1,7 +1,7 @@
-import type { CLIContext } from '../core.js';
+import { getScopedMemoryDb, type CLIContext } from '../core.js';
 import { Output } from '../output.js';
 import chalk from 'chalk';
-import type { Memory, SearchResult } from '../../memory-server/database.js';
+import type { Memory, MemoryDatabase, SearchResult } from '../../memory-server/database.js';
 
 type AskIntent = 'search' | 'list' | 'explain' | 'find';
 
@@ -109,10 +109,12 @@ class LearnedVocabulary {
 export async function askCommand(ctx: CLIContext, question: string, opts: {
   limit?: string;
   json?: boolean;
+  global?: boolean;
 }): Promise<void> {
   const limit = opts.limit ? parseInt(opts.limit, 10) : 10;
+  const memoryDb = getScopedMemoryDb(ctx, opts);
 
-  const vocabulary = new LearnedVocabulary(ctx.memoryDb.getAll());
+  const vocabulary = new LearnedVocabulary(memoryDb.getAll());
   const parsed = parseNaturalLanguageQuery(question, vocabulary);
   const searchQuery = parsed.searchTerms.join(' ');
 
@@ -133,7 +135,7 @@ export async function askCommand(ctx: CLIContext, question: string, opts: {
   }
 
   const searchPlan = buildSearchPlan(parsed, limit);
-  const results = runAskSearch(ctx, parsed, searchPlan, limit);
+  const results = runAskSearch(memoryDb, parsed, searchPlan, limit);
 
   if (results.length === 0) {
     if (opts.json) {
@@ -299,11 +301,11 @@ function buildSearchPlan(parsed: ParsedQuestion, limit: number): string[] {
   ).slice(0, 8);
 }
 
-function runAskSearch(ctx: CLIContext, parsed: ParsedQuestion, queries: string[], limit: number): SearchResult[] {
+function runAskSearch(memoryDb: MemoryDatabase, parsed: ParsedQuestion, queries: string[], limit: number): SearchResult[] {
   const merged = new Map<string, SearchResult>();
 
   queries.forEach((query, index) => {
-    const results = ctx.memoryDb.search({ q: query, k: Math.max(limit * 2, 6) });
+    const results = memoryDb.search({ q: query, k: Math.max(limit * 2, 6) });
     for (const result of results) {
       const reranked = rerankResult(result, parsed, query, index);
       if (reranked.score < 45) {

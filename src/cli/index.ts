@@ -71,6 +71,7 @@ program
   .command('ask <question>')
   .description('Ask a natural language question about your memories')
   .option('-l, --limit <n>', 'Max results (default: 10)')
+  .option('-g, --global', 'Use global memory scope')
   .option('-j, --json', 'Output JSON')
   .action(async (question: string, opts) => {
     const ctx = await initCLIContext();
