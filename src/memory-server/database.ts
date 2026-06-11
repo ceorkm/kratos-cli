@@ -757,6 +757,19 @@ export class MemoryDatabase {
     }
   }
 
+  /**
+   * Mark a memory as superseded: expire it immediately so reads skip it.
+   * The row is kept (auditable) but filtered out everywhere.
+   */
+  expireMemory(id: string): boolean {
+    const stmt = this.db.prepare(
+      'UPDATE memories SET expires_at = ?, updated_at = ? WHERE id = ? AND project_id = ?'
+    );
+    const now = Date.now();
+    const result = stmt.run(now, now, id, this.projectId);
+    return result.changes > 0;
+  }
+
   updateMemory(id: string, params: {
     summary?: string;
     text?: string;

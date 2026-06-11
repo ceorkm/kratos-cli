@@ -560,3 +560,49 @@ test('ask ranks rare terms above common words on a noisy corpus', () => {
   // Version token must survive tokenization
   assert.equal(ask.queries_tried.some(q => q.includes('2.3.1')), true);
 });
+
+test('ask applies score cliff, reports confidence, and explains with --why', () => {
+  const sandbox = makeSandbox();
+  const project = makeProject(sandbox.workspace, 'cliff-proj');
+
+  // Two strong answers + weakly related noise sharing one word
+  parseJson(runCli(['save', 'Stripe webhook signing secret lives in WEBHOOK_SECRET env var', '--tags', 'stripe,webhooks', '--importance', '5', '--json'],
+    { cwd: project, home: sandbox.home }).stdout);
+  parseJson(runCli(['save', 'Stripe webhook retries are idempotent via event id dedupe', '--tags', 'stripe,webhooks', '--importance', '4', '--json'],
+    { cwd: project, home: sandbox.home }).stdout);
+  for (let i = 0; i < 4; i++) {
+    parseJson(runCli(['save', `Note ${i}: refactored the frontend webhook-unrelated settings page`, '--importance', '2', '--json'],
+      { cwd: project, home: sandbox.home }).stdout);
+  }
+
+  const ask = parseJson(runCli(['ask', 'how do stripe webhooks work', '--json'],
+    { cwd: project, home: sandbox.home }).stdout);
+  assert.equal(ask.confidence, 'high');
+  // Cliff: weakly related notes must not ride along with the two real answers
+  assert.equal(ask.results.every(r => /Stripe webhook/.test(r.summary)), true);
+
+  const why = parseJson(runCli(['ask', 'how do stripe webhooks work', '--why', '--json'],
+    { cwd: project, home: sandbox.home }).stdout);
+  assert.notEqual(why.results[0].why, undefined);
+  assert.equal(Array.isArray(why.results[0].why.direct_hits), true);
+  assert.equal(why.results[0].why.direct_hits.some(h => h.term === 'stripe'), true);
+});
+
+test('save --supersedes expires the replaced memory', () => {
+  const sandbox = makeSandbox();
+  const project = makeProject(sandbox.workspace, 'supersede-proj');
+
+  const stale = parseJson(runCli(['save', 'Deploy target is the old Hetzner box', '--tags', 'deploy', '--json'],
+    { cwd: project, home: sandbox.home }).stdout);
+  const fresh = parseJson(runCli(['save', 'Deploy target is now Fly.io, region fra', '--tags', 'deploy', '--supersedes', stale.id, '--json'],
+    { cwd: project, home: sandbox.home }).stdout);
+  assert.equal(fresh.superseded.ok, true);
+
+  const search = parseJson(runCli(['search', 'deploy target', '--json'],
+    { cwd: project, home: sandbox.home }).stdout);
+  assert.equal(search.results.some(r => r.id === stale.id), false);
+  assert.equal(search.results.some(r => r.id === fresh.id), true);
+
+  const recent = parseJson(runCli(['recent', '--json'], { cwd: project, home: sandbox.home }).stdout);
+  assert.equal(recent.memories.some(m => m.id === stale.id), false);
+});

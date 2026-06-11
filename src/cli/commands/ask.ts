@@ -122,8 +122,9 @@ export async function askCommand(ctx: CLIContext, question: string, opts: {
   limit?: string;
   json?: boolean;
   global?: boolean;
+  why?: boolean;
 }): Promise<void> {
-  const limit = opts.limit ? parseInt(opts.limit, 10) : 10;
+  const limit = opts.limit ? parseInt(opts.limit, 10) : 5;
   const memoryDb = getScopedMemoryDb(ctx, opts);
 
   const vocabulary = new LearnedVocabulary(memoryDb.getAll());
@@ -147,7 +148,9 @@ export async function askCommand(ctx: CLIContext, question: string, opts: {
   }
 
   const searchPlan = buildSearchPlan(parsed, limit);
-  const results = runAskSearch(memoryDb, parsed, searchPlan, limit, vocabulary);
+  const ranked = runAskSearch(memoryDb, parsed, searchPlan, limit, vocabulary) as AskResult[];
+  const results = applyScoreCliff(ranked, limit);
+  const confidence = classifyConfidence(results);
 
   if (results.length === 0) {
     if (opts.json) {
@@ -156,6 +159,8 @@ export async function askCommand(ctx: CLIContext, question: string, opts: {
         search_query: searchQuery,
         queries_tried: searchPlan,
         count: 0,
+        total_matched: 0,
+        confidence: 'low',
         answer: null,
         results: [],
       });
@@ -173,6 +178,8 @@ export async function askCommand(ctx: CLIContext, question: string, opts: {
       search_query: searchQuery,
       queries_tried: searchPlan,
       count: results.length,
+      total_matched: ranked.length,
+      confidence,
       answer: synthesizeAnswer(topResults),
       results: topResults.map(r => ({
         id: r.memory.id,
@@ -185,6 +192,7 @@ export async function askCommand(ctx: CLIContext, question: string, opts: {
         updated_at: r.memory.updated_at,
         score: r.score,
         snippet: r.snippet,
+        ...(opts.why ? { why: (r as AskResult).askExplain } : {}),
       })),
     });
     return;
@@ -232,7 +240,21 @@ export async function askCommand(ctx: CLIContext, question: string, opts: {
 
   // Footer
   console.log('');
-  console.log(chalk.dim(`  Based on ${results.length} memor${results.length === 1 ? 'y' : 'ies'} | searched: "${searchQuery}"`));
+  const confColor = confidence === 'high' ? chalk.green : confidence === 'medium' ? chalk.yellow : chalk.dim;
+  console.log(confColor(`  Confidence: ${confidence}`) + chalk.dim(` | ${results.length} memor${results.length === 1 ? 'y' : 'ies'}${ranked.length > results.length ? ` (cut ${ranked.length - results.length} weakly related)` : ''} | searched: "${searchQuery}"`));
+
+  if (opts.why) {
+    console.log('');
+    console.log(chalk.bold.white('  Why these results:'));
+    for (const r of results as AskResult[]) {
+      const e = r.askExplain;
+      if (!e) continue;
+      const directs = e.direct_hits.map(h => `${h.term}(${h.weight})`).join(' ') || 'none';
+      const expansions = e.expansion_hits.map(h => `${h.term}→${h.via}`).join(' ') || 'none';
+      console.log(chalk.dim(`  [${r.score}] ${r.memory.summary.substring(0, 50)}`));
+      console.log(chalk.dim(`        coverage ${e.coverage} | direct: ${directs} | via expansion: ${expansions} | fts ${e.fts_signal}`));
+    }
+  }
   console.log('');
 }
 
@@ -323,6 +345,41 @@ function buildSearchPlan(parsed: ParsedQuestion, limit: number): string[] {
   ).slice(0, 8);
 }
 
+interface AskResult extends SearchResult {
+  askExplain?: {
+    coverage: number;
+    direct_hits: Array<{ term: string; weight: number }>;
+    expansion_hits: Array<{ term: string; via: string }>;
+    fts_signal: number;
+  };
+}
+
+/**
+ * Dynamic cutoff: results after a steep score drop are word-related, not
+ * answer-related. 98/92/86/69/66 should stop at 86.
+ */
+function applyScoreCliff(results: AskResult[], limit: number): AskResult[] {
+  if (results.length <= 1) return results.slice(0, limit);
+  const kept: AskResult[] = [results[0]];
+  for (let i = 1; i < results.length && kept.length < limit; i++) {
+    const drop = kept[kept.length - 1].score - results[i].score;
+    if (drop > 14 && results[i].score < results[0].score * 0.82) break;
+    kept.push(results[i]);
+  }
+  return kept;
+}
+
+type Confidence = 'high' | 'medium' | 'low';
+
+function classifyConfidence(results: AskResult[]): Confidence {
+  if (results.length === 0) return 'low';
+  const top = results[0];
+  const directs = top.askExplain?.direct_hits.length ?? 0;
+  if (top.score >= 75 && directs >= 1) return 'high';
+  if (top.score >= 55) return 'medium';
+  return 'low';
+}
+
 function runAskSearch(memoryDb: MemoryDatabase, parsed: ParsedQuestion, queries: string[], limit: number, vocabulary: LearnedVocabulary): SearchResult[] {
   const merged = new Map<string, SearchResult>();
 
@@ -406,18 +463,23 @@ function rerankResult(result: SearchResult, parsed: ParsedQuestion, query: strin
   // get a neutral weight so questions in unseen vocabulary still rank.
   let totalWeight = 0;
   let matchedWeight = 0;
+  const directHits: Array<{ term: string; weight: number }> = [];
+  const expansionHits: Array<{ term: string; via: string }> = [];
   for (const term of parsed.searchTerms) {
     const weight = vocabulary.df(term) > 0 ? vocabulary.idf(term) : 1;
     totalWeight += weight;
     if (memoryTerms.has(singularize(term))) {
       // Direct hit: full rarity-weighted credit
       matchedWeight += weight;
+      directHits.push({ term, weight: Number(weight.toFixed(2)) });
     } else {
       // Expansion-only hit: capped credit — co-occurrence guesses must not
       // satisfy rare anchor terms cheaply
       const candidates = parsed.termExpansions.get(term) || [term];
-      if (candidates.some(candidate => memoryTerms.has(singularize(candidate)))) {
+      const via = candidates.find(candidate => memoryTerms.has(singularize(candidate)));
+      if (via) {
         matchedWeight += Math.min(weight, 1);
+        expansionHits.push({ term, via });
       }
     }
   }
@@ -434,7 +496,13 @@ function rerankResult(result: SearchResult, parsed: ParsedQuestion, query: strin
   return {
     ...result,
     score: Math.max(0, Math.min(100, Math.round(score))),
-  };
+    askExplain: {
+      coverage: Number(coverage.toFixed(2)),
+      direct_hits: directHits,
+      expansion_hits: expansionHits,
+      fts_signal: Math.round(result.score * 0.22),
+    },
+  } as AskResult;
 }
 
 function extractMemoryTerms(memory: SearchResult['memory']): string[] {

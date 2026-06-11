@@ -43,6 +43,7 @@ program
   .option('-i, --importance <level>', 'Importance 1-5 (default: 3)')
   .option('-c, --compress', 'Compress text before saving')
   .option('-g, --global', 'Use global memory scope')
+  .option('-s, --supersedes <id>', 'Expire an outdated memory this one replaces')
   .option('-j, --json', 'Output JSON')
   .action(async (text: string, opts) => {
     const ctx = await initCLIContext();
@@ -70,8 +71,9 @@ program
 program
   .command('ask <question>')
   .description('Ask a natural language question about your memories')
-  .option('-l, --limit <n>', 'Max results (default: 10)')
+  .option('-l, --limit <n>', 'Max results (default: 5)')
   .option('-g, --global', 'Use global memory scope')
+  .option('-w, --why', 'Explain why each result ranked where it did')
   .option('-j, --json', 'Output JSON')
   .action(async (question: string, opts) => {
     const ctx = await initCLIContext();

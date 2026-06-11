@@ -8,6 +8,7 @@ export async function saveCommand(ctx: CLIContext, text: string, opts: {
   compress?: boolean;
   json?: boolean;
   global?: boolean;
+  supersedes?: string;
 }): Promise<void> {
   const memoryDb = getScopedMemoryDb(ctx, opts);
   const scope = memoryDb.getScope();
@@ -43,6 +44,13 @@ export async function saveCommand(ctx: CLIContext, text: string, opts: {
 
   const id = (result as any).id;
 
+  // Replace a stale memory: the old one is expired, not deleted
+  let superseded: { id: string; ok: boolean } | null = null;
+  if (opts.supersedes) {
+    const ok = memoryDb.expireMemory(opts.supersedes);
+    superseded = { id: opts.supersedes, ok };
+  }
+
   if (opts.json) {
     Output.json({
       ok: true,
@@ -55,6 +63,7 @@ export async function saveCommand(ctx: CLIContext, text: string, opts: {
       paths,
       importance,
       compressed: !!opts.compress,
+      superseded,
       warning: scanResult.hasPII || scanResult.hasSecrets ? {
         has_pii: scanResult.hasPII,
         has_secrets: scanResult.hasSecrets,
@@ -75,5 +84,9 @@ export async function saveCommand(ctx: CLIContext, text: string, opts: {
   }
 
   Output.success(`Memory saved: ${id}`);
+  if (superseded) {
+    if (superseded.ok) Output.dim(`Superseded (expired): ${superseded.id}`);
+    else Output.warn(`Could not supersede ${superseded.id} — not found in this scope`);
+  }
   Output.dim(`${scope === 'global' ? 'Scope: global' : `Project: ${ctx.project.name}`} | Tags: ${tags.join(', ') || 'none'} | Importance: ${importance}`);
 }
